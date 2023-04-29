@@ -140,7 +140,6 @@ const file_command_1 = __nccwpck_require__(717);
 const utils_1 = __nccwpck_require__(5278);
 const os = __importStar(__nccwpck_require__(22037));
 const path = __importStar(__nccwpck_require__(71017));
-const uuid_1 = __nccwpck_require__(75840);
 const oidc_utils_1 = __nccwpck_require__(98041);
 /**
  * The code to exit an action
@@ -170,20 +169,9 @@ function exportVariable(name, val) {
     process.env[name] = convertedVal;
     const filePath = process.env['GITHUB_ENV'] || '';
     if (filePath) {
-        const delimiter = `ghadelimiter_${uuid_1.v4()}`;
-        // These should realistically never happen, but just in case someone finds a way to exploit uuid generation let's not allow keys or values that contain the delimiter.
-        if (name.includes(delimiter)) {
-            throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
-        }
-        if (convertedVal.includes(delimiter)) {
-            throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
-        }
-        const commandValue = `${name}<<${delimiter}${os.EOL}${convertedVal}${os.EOL}${delimiter}`;
-        file_command_1.issueCommand('ENV', commandValue);
+        return file_command_1.issueFileCommand('ENV', file_command_1.prepareKeyValueMessage(name, val));
     }
-    else {
-        command_1.issueCommand('set-env', { name }, convertedVal);
-    }
+    command_1.issueCommand('set-env', { name }, convertedVal);
 }
 exports.exportVariable = exportVariable;
 /**
@@ -201,7 +189,7 @@ exports.setSecret = setSecret;
 function addPath(inputPath) {
     const filePath = process.env['GITHUB_PATH'] || '';
     if (filePath) {
-        file_command_1.issueCommand('PATH', inputPath);
+        file_command_1.issueFileCommand('PATH', inputPath);
     }
     else {
         command_1.issueCommand('add-path', {}, inputPath);
@@ -241,7 +229,10 @@ function getMultilineInput(name, options) {
     const inputs = getInput(name, options)
         .split('\n')
         .filter(x => x !== '');
-    return inputs;
+    if (options && options.trimWhitespace === false) {
+        return inputs;
+    }
+    return inputs.map(input => input.trim());
 }
 exports.getMultilineInput = getMultilineInput;
 /**
@@ -274,8 +265,12 @@ exports.getBooleanInput = getBooleanInput;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function setOutput(name, value) {
+    const filePath = process.env['GITHUB_OUTPUT'] || '';
+    if (filePath) {
+        return file_command_1.issueFileCommand('OUTPUT', file_command_1.prepareKeyValueMessage(name, value));
+    }
     process.stdout.write(os.EOL);
-    command_1.issueCommand('set-output', { name }, value);
+    command_1.issueCommand('set-output', { name }, utils_1.toCommandValue(value));
 }
 exports.setOutput = setOutput;
 /**
@@ -404,7 +399,11 @@ exports.group = group;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function saveState(name, value) {
-    command_1.issueCommand('save-state', { name }, value);
+    const filePath = process.env['GITHUB_STATE'] || '';
+    if (filePath) {
+        return file_command_1.issueFileCommand('STATE', file_command_1.prepareKeyValueMessage(name, value));
+    }
+    command_1.issueCommand('save-state', { name }, utils_1.toCommandValue(value));
 }
 exports.saveState = saveState;
 /**
@@ -470,13 +469,14 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.issueCommand = void 0;
+exports.prepareKeyValueMessage = exports.issueFileCommand = void 0;
 // We use any as a valid input type
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const fs = __importStar(__nccwpck_require__(57147));
 const os = __importStar(__nccwpck_require__(22037));
+const uuid_1 = __nccwpck_require__(75840);
 const utils_1 = __nccwpck_require__(5278);
-function issueCommand(command, message) {
+function issueFileCommand(command, message) {
     const filePath = process.env[`GITHUB_${command}`];
     if (!filePath) {
         throw new Error(`Unable to find environment variable for file command ${command}`);
@@ -488,7 +488,22 @@ function issueCommand(command, message) {
         encoding: 'utf8'
     });
 }
-exports.issueCommand = issueCommand;
+exports.issueFileCommand = issueFileCommand;
+function prepareKeyValueMessage(key, value) {
+    const delimiter = `ghadelimiter_${uuid_1.v4()}`;
+    const convertedValue = utils_1.toCommandValue(value);
+    // These should realistically never happen, but just in case someone finds a
+    // way to exploit uuid generation let's not allow keys or values that contain
+    // the delimiter.
+    if (key.includes(delimiter)) {
+        throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
+    }
+    if (convertedValue.includes(delimiter)) {
+        throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
+    }
+    return `${key}<<${delimiter}${os.EOL}${convertedValue}${os.EOL}${delimiter}`;
+}
+exports.prepareKeyValueMessage = prepareKeyValueMessage;
 //# sourceMappingURL=file-command.js.map
 
 /***/ }),
@@ -1075,8 +1090,9 @@ exports.context = new Context.Context();
  * @param     token    the repo PAT or GITHUB_TOKEN
  * @param     options  other options to set
  */
-function getOctokit(token, options) {
-    return new utils_1.GitHub(utils_1.getOctokitOptions(token, options));
+function getOctokit(token, options, ...additionalPlugins) {
+    const GitHubWithPlugins = utils_1.GitHub.plugin(...additionalPlugins);
+    return new GitHubWithPlugins(utils_1.getOctokitOptions(token, options));
 }
 exports.getOctokit = getOctokit;
 //# sourceMappingURL=github.js.map
@@ -1158,7 +1174,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getOctokitOptions = exports.GitHub = exports.context = void 0;
+exports.getOctokitOptions = exports.GitHub = exports.defaults = exports.context = void 0;
 const Context = __importStar(__nccwpck_require__(74087));
 const Utils = __importStar(__nccwpck_require__(47914));
 // octokit + plugins
@@ -1167,13 +1183,13 @@ const plugin_rest_endpoint_methods_1 = __nccwpck_require__(83044);
 const plugin_paginate_rest_1 = __nccwpck_require__(64193);
 exports.context = new Context.Context();
 const baseUrl = Utils.getApiBaseUrl();
-const defaults = {
+exports.defaults = {
     baseUrl,
     request: {
         agent: Utils.getProxyAgent(baseUrl)
     }
 };
-exports.GitHub = core_1.Octokit.plugin(plugin_rest_endpoint_methods_1.restEndpointMethods, plugin_paginate_rest_1.paginateRest).defaults(defaults);
+exports.GitHub = core_1.Octokit.plugin(plugin_rest_endpoint_methods_1.restEndpointMethods, plugin_paginate_rest_1.paginateRest).defaults(exports.defaults);
 /**
  * Convience function to correctly format Octokit Options to pass into the constructor.
  *
@@ -1926,6 +1942,10 @@ function checkBypass(reqUrl) {
     if (!reqUrl.hostname) {
         return false;
     }
+    const reqHost = reqUrl.hostname;
+    if (isLoopbackAddress(reqHost)) {
+        return true;
+    }
     const noProxy = process.env['no_proxy'] || process.env['NO_PROXY'] || '';
     if (!noProxy) {
         return false;
@@ -1951,13 +1971,24 @@ function checkBypass(reqUrl) {
         .split(',')
         .map(x => x.trim().toUpperCase())
         .filter(x => x)) {
-        if (upperReqHosts.some(x => x === upperNoProxyItem)) {
+        if (upperNoProxyItem === '*' ||
+            upperReqHosts.some(x => x === upperNoProxyItem ||
+                x.endsWith(`.${upperNoProxyItem}`) ||
+                (upperNoProxyItem.startsWith('.') &&
+                    x.endsWith(`${upperNoProxyItem}`)))) {
             return true;
         }
     }
     return false;
 }
 exports.checkBypass = checkBypass;
+function isLoopbackAddress(host) {
+    const hostLower = host.toLowerCase();
+    return (hostLower === 'localhost' ||
+        hostLower.startsWith('127.') ||
+        hostLower.startsWith('[::1]') ||
+        hostLower.startsWith('[0:0:0:0:0:0:0:1]'));
+}
 //# sourceMappingURL=proxy.js.map
 
 /***/ }),
@@ -2217,7 +2248,7 @@ exports.Octokit = Octokit;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 
-var isPlainObject = __nccwpck_require__(70558);
+var isPlainObject = __nccwpck_require__(63287);
 var universalUserAgent = __nccwpck_require__(45030);
 
 function lowercaseKeys(object) {
@@ -2607,52 +2638,6 @@ exports.endpoint = endpoint;
 
 /***/ }),
 
-/***/ 70558:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-/*!
- * is-plain-object <https://github.com/jonschlinkert/is-plain-object>
- *
- * Copyright (c) 2014-2017, Jon Schlinkert.
- * Released under the MIT License.
- */
-
-function isObject(o) {
-  return Object.prototype.toString.call(o) === '[object Object]';
-}
-
-function isPlainObject(o) {
-  var ctor,prot;
-
-  if (isObject(o) === false) return false;
-
-  // If has modified constructor
-  ctor = o.constructor;
-  if (ctor === undefined) return true;
-
-  // If has modified prototype
-  prot = ctor.prototype;
-  if (isObject(prot) === false) return false;
-
-  // If constructor does not have an Object-specific method
-  if (prot.hasOwnProperty('isPrototypeOf') === false) {
-    return false;
-  }
-
-  // Most likely a plain Object
-  return true;
-}
-
-exports.isPlainObject = isPlainObject;
-
-
-/***/ }),
-
 /***/ 88467:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -2787,21 +2772,16 @@ exports.withCustomRequest = withCustomRequest;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 
-const VERSION = "2.17.0";
+const VERSION = "2.21.3";
 
 function ownKeys(object, enumerableOnly) {
   var keys = Object.keys(object);
 
   if (Object.getOwnPropertySymbols) {
     var symbols = Object.getOwnPropertySymbols(object);
-
-    if (enumerableOnly) {
-      symbols = symbols.filter(function (sym) {
-        return Object.getOwnPropertyDescriptor(object, sym).enumerable;
-      });
-    }
-
-    keys.push.apply(keys, symbols);
+    enumerableOnly && (symbols = symbols.filter(function (sym) {
+      return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+    })), keys.push.apply(keys, symbols);
   }
 
   return keys;
@@ -2809,19 +2789,12 @@ function ownKeys(object, enumerableOnly) {
 
 function _objectSpread2(target) {
   for (var i = 1; i < arguments.length; i++) {
-    var source = arguments[i] != null ? arguments[i] : {};
-
-    if (i % 2) {
-      ownKeys(Object(source), true).forEach(function (key) {
-        _defineProperty(target, key, source[key]);
-      });
-    } else if (Object.getOwnPropertyDescriptors) {
-      Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
-    } else {
-      ownKeys(Object(source)).forEach(function (key) {
-        Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
-      });
-    }
+    var source = null != arguments[i] ? arguments[i] : {};
+    i % 2 ? ownKeys(Object(source), !0).forEach(function (key) {
+      _defineProperty(target, key, source[key]);
+    }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(target, Object.getOwnPropertyDescriptors(source)) : ownKeys(Object(source)).forEach(function (key) {
+      Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+    });
   }
 
   return target;
@@ -2971,7 +2944,7 @@ const composePaginateRest = Object.assign(paginate, {
   iterator
 });
 
-const paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /applications/grants", "GET /authorizations", "GET /enterprises/{enterprise}/actions/permissions/organizations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/organizations", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/runners", "GET /enterprises/{enterprise}/actions/runners", "GET /enterprises/{enterprise}/actions/runners/downloads", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/runners/downloads", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/blocks", "GET /orgs/{org}/credential-authorizations", "GET /orgs/{org}/events", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/team-sync/groups", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/team-sync/group-mappings", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runners/downloads", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/autolinks", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/branches-where-head", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/git/matching-refs/{ref}", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /scim/v2/enterprises/{enterprise}/Groups", "GET /scim/v2/enterprises/{enterprise}/Users", "GET /scim/v2/organizations/{org}/Users", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/team-sync/group-mappings", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
+const paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /applications/grants", "GET /authorizations", "GET /enterprises/{enterprise}/actions/permissions/organizations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/organizations", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/runners", "GET /enterprises/{enterprise}/actions/runners", "GET /enterprises/{enterprise}/audit-log", "GET /enterprises/{enterprise}/secret-scanning/alerts", "GET /enterprises/{enterprise}/settings/billing/advanced-security", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /licenses", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /orgs/{org}/actions/cache/usage-by-repository", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/audit-log", "GET /orgs/{org}/blocks", "GET /orgs/{org}/code-scanning/alerts", "GET /orgs/{org}/codespaces", "GET /orgs/{org}/credential-authorizations", "GET /orgs/{org}/dependabot/secrets", "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories", "GET /orgs/{org}/events", "GET /orgs/{org}/external-groups", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/packages/{package_type}/{package_name}/versions", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/settings/billing/advanced-security", "GET /orgs/{org}/team-sync/groups", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/caches", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/codespaces", "GET /repos/{owner}/{repo}/codespaces/devcontainers", "GET /repos/{owner}/{repo}/codespaces/secrets", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/status", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/dependabot/secrets", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/environments", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/git/matching-refs/{ref}", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/releases/{release_id}/reactions", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repos/{owner}/{repo}/topics", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/codespaces", "GET /user/codespaces/secrets", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/packages/{package_type}/{package_name}/versions", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
 
 function isPaginatingEndpoint(arg) {
   if (typeof arg === "string") {
@@ -3067,6 +3040,8 @@ function _defineProperty(obj, key, value) {
 
 const Endpoints = {
   actions: {
+    addCustomLabelsToSelfHostedRunnerForOrg: ["POST /orgs/{org}/actions/runners/{runner_id}/labels"],
+    addCustomLabelsToSelfHostedRunnerForRepo: ["POST /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
     addSelectedRepoToOrgSecret: ["PUT /orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}"],
     approveWorkflowRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve"],
     cancelWorkflowRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel"],
@@ -3078,6 +3053,8 @@ const Endpoints = {
     createRemoveTokenForOrg: ["POST /orgs/{org}/actions/runners/remove-token"],
     createRemoveTokenForRepo: ["POST /repos/{owner}/{repo}/actions/runners/remove-token"],
     createWorkflowDispatch: ["POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"],
+    deleteActionsCacheById: ["DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}"],
+    deleteActionsCacheByKey: ["DELETE /repos/{owner}/{repo}/actions/caches{?key,ref}"],
     deleteArtifact: ["DELETE /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],
     deleteEnvironmentSecret: ["DELETE /repositories/{repository_id}/environments/{environment_name}/secrets/{secret_name}"],
     deleteOrgSecret: ["DELETE /orgs/{org}/actions/secrets/{secret_name}"],
@@ -3094,11 +3071,19 @@ const Endpoints = {
     downloadWorkflowRunLogs: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs"],
     enableSelectedRepositoryGithubActionsOrganization: ["PUT /orgs/{org}/actions/permissions/repositories/{repository_id}"],
     enableWorkflow: ["PUT /repos/{owner}/{repo}/actions/workflows/{workflow_id}/enable"],
+    getActionsCacheList: ["GET /repos/{owner}/{repo}/actions/caches"],
+    getActionsCacheUsage: ["GET /repos/{owner}/{repo}/actions/cache/usage"],
+    getActionsCacheUsageByRepoForOrg: ["GET /orgs/{org}/actions/cache/usage-by-repository"],
+    getActionsCacheUsageForEnterprise: ["GET /enterprises/{enterprise}/actions/cache/usage"],
+    getActionsCacheUsageForOrg: ["GET /orgs/{org}/actions/cache/usage"],
     getAllowedActionsOrganization: ["GET /orgs/{org}/actions/permissions/selected-actions"],
     getAllowedActionsRepository: ["GET /repos/{owner}/{repo}/actions/permissions/selected-actions"],
     getArtifact: ["GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],
     getEnvironmentPublicKey: ["GET /repositories/{repository_id}/environments/{environment_name}/secrets/public-key"],
     getEnvironmentSecret: ["GET /repositories/{repository_id}/environments/{environment_name}/secrets/{secret_name}"],
+    getGithubActionsDefaultWorkflowPermissionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions/workflow"],
+    getGithubActionsDefaultWorkflowPermissionsOrganization: ["GET /orgs/{org}/actions/permissions/workflow"],
+    getGithubActionsDefaultWorkflowPermissionsRepository: ["GET /repos/{owner}/{repo}/actions/permissions/workflow"],
     getGithubActionsPermissionsOrganization: ["GET /orgs/{org}/actions/permissions"],
     getGithubActionsPermissionsRepository: ["GET /repos/{owner}/{repo}/actions/permissions"],
     getJobForWorkflowRun: ["GET /repos/{owner}/{repo}/actions/jobs/{job_id}"],
@@ -3114,6 +3099,7 @@ const Endpoints = {
     getSelfHostedRunnerForOrg: ["GET /orgs/{org}/actions/runners/{runner_id}"],
     getSelfHostedRunnerForRepo: ["GET /repos/{owner}/{repo}/actions/runners/{runner_id}"],
     getWorkflow: ["GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}"],
+    getWorkflowAccessToRepository: ["GET /repos/{owner}/{repo}/actions/permissions/access"],
     getWorkflowRun: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}"],
     getWorkflowRunAttempt: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}"],
     getWorkflowRunUsage: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/timing"],
@@ -3122,6 +3108,8 @@ const Endpoints = {
     listEnvironmentSecrets: ["GET /repositories/{repository_id}/environments/{environment_name}/secrets"],
     listJobsForWorkflowRun: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs"],
     listJobsForWorkflowRunAttempt: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs"],
+    listLabelsForSelfHostedRunnerForOrg: ["GET /orgs/{org}/actions/runners/{runner_id}/labels"],
+    listLabelsForSelfHostedRunnerForRepo: ["GET /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
     listOrgSecrets: ["GET /orgs/{org}/actions/secrets"],
     listRepoSecrets: ["GET /repos/{owner}/{repo}/actions/secrets"],
     listRepoWorkflows: ["GET /repos/{owner}/{repo}/actions/workflows"],
@@ -3134,14 +3122,27 @@ const Endpoints = {
     listWorkflowRunArtifacts: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"],
     listWorkflowRuns: ["GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"],
     listWorkflowRunsForRepo: ["GET /repos/{owner}/{repo}/actions/runs"],
+    reRunJobForWorkflowRun: ["POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun"],
+    reRunWorkflow: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun"],
+    reRunWorkflowFailedJobs: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs"],
+    removeAllCustomLabelsFromSelfHostedRunnerForOrg: ["DELETE /orgs/{org}/actions/runners/{runner_id}/labels"],
+    removeAllCustomLabelsFromSelfHostedRunnerForRepo: ["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
+    removeCustomLabelFromSelfHostedRunnerForOrg: ["DELETE /orgs/{org}/actions/runners/{runner_id}/labels/{name}"],
+    removeCustomLabelFromSelfHostedRunnerForRepo: ["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}/labels/{name}"],
     removeSelectedRepoFromOrgSecret: ["DELETE /orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}"],
     reviewPendingDeploymentsForRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"],
     setAllowedActionsOrganization: ["PUT /orgs/{org}/actions/permissions/selected-actions"],
     setAllowedActionsRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/selected-actions"],
+    setCustomLabelsForSelfHostedRunnerForOrg: ["PUT /orgs/{org}/actions/runners/{runner_id}/labels"],
+    setCustomLabelsForSelfHostedRunnerForRepo: ["PUT /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
+    setGithubActionsDefaultWorkflowPermissionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/workflow"],
+    setGithubActionsDefaultWorkflowPermissionsOrganization: ["PUT /orgs/{org}/actions/permissions/workflow"],
+    setGithubActionsDefaultWorkflowPermissionsRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/workflow"],
     setGithubActionsPermissionsOrganization: ["PUT /orgs/{org}/actions/permissions"],
     setGithubActionsPermissionsRepository: ["PUT /repos/{owner}/{repo}/actions/permissions"],
     setSelectedReposForOrgSecret: ["PUT /orgs/{org}/actions/secrets/{secret_name}/repositories"],
-    setSelectedRepositoriesEnabledGithubActionsOrganization: ["PUT /orgs/{org}/actions/permissions/repositories"]
+    setSelectedRepositoriesEnabledGithubActionsOrganization: ["PUT /orgs/{org}/actions/permissions/repositories"],
+    setWorkflowAccessToRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/access"]
   },
   activity: {
     checkRepoIsStarredByAuthenticatedUser: ["GET /user/starred/{owner}/{repo}"],
@@ -3182,16 +3183,6 @@ const Endpoints = {
     }],
     addRepoToInstallationForAuthenticatedUser: ["PUT /user/installations/{installation_id}/repositories/{repository_id}"],
     checkToken: ["POST /applications/{client_id}/token"],
-    createContentAttachment: ["POST /content_references/{content_reference_id}/attachments", {
-      mediaType: {
-        previews: ["corsair"]
-      }
-    }],
-    createContentAttachmentForRepo: ["POST /repos/{owner}/{repo}/content_references/{content_reference_id}/attachments", {
-      mediaType: {
-        previews: ["corsair"]
-      }
-    }],
     createFromManifest: ["POST /app-manifests/{code}/conversions"],
     createInstallationAccessToken: ["POST /app/installations/{installation_id}/access_tokens"],
     deleteAuthorization: ["DELETE /applications/{client_id}/grant"],
@@ -3233,6 +3224,8 @@ const Endpoints = {
   billing: {
     getGithubActionsBillingOrg: ["GET /orgs/{org}/settings/billing/actions"],
     getGithubActionsBillingUser: ["GET /users/{username}/settings/billing/actions"],
+    getGithubAdvancedSecurityBillingGhe: ["GET /enterprises/{enterprise}/settings/billing/advanced-security"],
+    getGithubAdvancedSecurityBillingOrg: ["GET /orgs/{org}/settings/billing/advanced-security"],
     getGithubPackagesBillingOrg: ["GET /orgs/{org}/settings/billing/packages"],
     getGithubPackagesBillingUser: ["GET /users/{username}/settings/billing/packages"],
     getSharedStorageBillingOrg: ["GET /orgs/{org}/settings/billing/shared-storage"],
@@ -3262,6 +3255,7 @@ const Endpoints = {
     getAnalysis: ["GET /repos/{owner}/{repo}/code-scanning/analyses/{analysis_id}"],
     getSarif: ["GET /repos/{owner}/{repo}/code-scanning/sarifs/{sarif_id}"],
     listAlertInstances: ["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances"],
+    listAlertsForOrg: ["GET /orgs/{org}/code-scanning/alerts"],
     listAlertsForRepo: ["GET /repos/{owner}/{repo}/code-scanning/alerts"],
     listAlertsInstances: ["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", {}, {
       renamed: ["codeScanning", "listAlertInstances"]
@@ -3274,16 +3268,80 @@ const Endpoints = {
     getAllCodesOfConduct: ["GET /codes_of_conduct"],
     getConductCode: ["GET /codes_of_conduct/{key}"]
   },
+  codespaces: {
+    addRepositoryForSecretForAuthenticatedUser: ["PUT /user/codespaces/secrets/{secret_name}/repositories/{repository_id}"],
+    codespaceMachinesForAuthenticatedUser: ["GET /user/codespaces/{codespace_name}/machines"],
+    createForAuthenticatedUser: ["POST /user/codespaces"],
+    createOrUpdateRepoSecret: ["PUT /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],
+    createOrUpdateSecretForAuthenticatedUser: ["PUT /user/codespaces/secrets/{secret_name}"],
+    createWithPrForAuthenticatedUser: ["POST /repos/{owner}/{repo}/pulls/{pull_number}/codespaces"],
+    createWithRepoForAuthenticatedUser: ["POST /repos/{owner}/{repo}/codespaces"],
+    deleteForAuthenticatedUser: ["DELETE /user/codespaces/{codespace_name}"],
+    deleteFromOrganization: ["DELETE /orgs/{org}/members/{username}/codespaces/{codespace_name}"],
+    deleteRepoSecret: ["DELETE /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],
+    deleteSecretForAuthenticatedUser: ["DELETE /user/codespaces/secrets/{secret_name}"],
+    exportForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/exports"],
+    getExportDetailsForAuthenticatedUser: ["GET /user/codespaces/{codespace_name}/exports/{export_id}"],
+    getForAuthenticatedUser: ["GET /user/codespaces/{codespace_name}"],
+    getPublicKeyForAuthenticatedUser: ["GET /user/codespaces/secrets/public-key"],
+    getRepoPublicKey: ["GET /repos/{owner}/{repo}/codespaces/secrets/public-key"],
+    getRepoSecret: ["GET /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],
+    getSecretForAuthenticatedUser: ["GET /user/codespaces/secrets/{secret_name}"],
+    listDevcontainersInRepositoryForAuthenticatedUser: ["GET /repos/{owner}/{repo}/codespaces/devcontainers"],
+    listForAuthenticatedUser: ["GET /user/codespaces"],
+    listInOrganization: ["GET /orgs/{org}/codespaces", {}, {
+      renamedParameters: {
+        org_id: "org"
+      }
+    }],
+    listInRepositoryForAuthenticatedUser: ["GET /repos/{owner}/{repo}/codespaces"],
+    listRepoSecrets: ["GET /repos/{owner}/{repo}/codespaces/secrets"],
+    listRepositoriesForSecretForAuthenticatedUser: ["GET /user/codespaces/secrets/{secret_name}/repositories"],
+    listSecretsForAuthenticatedUser: ["GET /user/codespaces/secrets"],
+    removeRepositoryForSecretForAuthenticatedUser: ["DELETE /user/codespaces/secrets/{secret_name}/repositories/{repository_id}"],
+    repoMachinesForAuthenticatedUser: ["GET /repos/{owner}/{repo}/codespaces/machines"],
+    setRepositoriesForSecretForAuthenticatedUser: ["PUT /user/codespaces/secrets/{secret_name}/repositories"],
+    startForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/start"],
+    stopForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/stop"],
+    stopInOrganization: ["POST /orgs/{org}/members/{username}/codespaces/{codespace_name}/stop"],
+    updateForAuthenticatedUser: ["PATCH /user/codespaces/{codespace_name}"]
+  },
+  dependabot: {
+    addSelectedRepoToOrgSecret: ["PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories/{repository_id}"],
+    createOrUpdateOrgSecret: ["PUT /orgs/{org}/dependabot/secrets/{secret_name}"],
+    createOrUpdateRepoSecret: ["PUT /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],
+    deleteOrgSecret: ["DELETE /orgs/{org}/dependabot/secrets/{secret_name}"],
+    deleteRepoSecret: ["DELETE /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],
+    getOrgPublicKey: ["GET /orgs/{org}/dependabot/secrets/public-key"],
+    getOrgSecret: ["GET /orgs/{org}/dependabot/secrets/{secret_name}"],
+    getRepoPublicKey: ["GET /repos/{owner}/{repo}/dependabot/secrets/public-key"],
+    getRepoSecret: ["GET /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],
+    listOrgSecrets: ["GET /orgs/{org}/dependabot/secrets"],
+    listRepoSecrets: ["GET /repos/{owner}/{repo}/dependabot/secrets"],
+    listSelectedReposForOrgSecret: ["GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories"],
+    removeSelectedRepoFromOrgSecret: ["DELETE /orgs/{org}/dependabot/secrets/{secret_name}/repositories/{repository_id}"],
+    setSelectedReposForOrgSecret: ["PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories"]
+  },
+  dependencyGraph: {
+    createRepositorySnapshot: ["POST /repos/{owner}/{repo}/dependency-graph/snapshots"],
+    diffRange: ["GET /repos/{owner}/{repo}/dependency-graph/compare/{basehead}"]
+  },
   emojis: {
     get: ["GET /emojis"]
   },
   enterpriseAdmin: {
+    addCustomLabelsToSelfHostedRunnerForEnterprise: ["POST /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
     disableSelectedOrganizationGithubActionsEnterprise: ["DELETE /enterprises/{enterprise}/actions/permissions/organizations/{org_id}"],
     enableSelectedOrganizationGithubActionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/organizations/{org_id}"],
     getAllowedActionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions/selected-actions"],
     getGithubActionsPermissionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions"],
+    getServerStatistics: ["GET /enterprise-installation/{enterprise_or_org}/server-statistics"],
+    listLabelsForSelfHostedRunnerForEnterprise: ["GET /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
     listSelectedOrganizationsEnabledGithubActionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions/organizations"],
+    removeAllCustomLabelsFromSelfHostedRunnerForEnterprise: ["DELETE /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
+    removeCustomLabelFromSelfHostedRunnerForEnterprise: ["DELETE /enterprises/{enterprise}/actions/runners/{runner_id}/labels/{name}"],
     setAllowedActionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/selected-actions"],
+    setCustomLabelsForSelfHostedRunnerForEnterprise: ["PUT /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
     setGithubActionsPermissionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions"],
     setSelectedOrganizationsEnabledGithubActionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/organizations"]
   },
@@ -3454,6 +3512,7 @@ const Endpoints = {
     list: ["GET /organizations"],
     listAppInstallations: ["GET /orgs/{org}/installations"],
     listBlockedUsers: ["GET /orgs/{org}/blocks"],
+    listCustomRoles: ["GET /organizations/{organization_id}/custom_roles"],
     listFailedInvitations: ["GET /orgs/{org}/failed_invitations"],
     listForAuthenticatedUser: ["GET /user/orgs"],
     listForUser: ["GET /users/{username}/orgs"],
@@ -3582,12 +3641,14 @@ const Endpoints = {
     deleteForIssue: ["DELETE /repos/{owner}/{repo}/issues/{issue_number}/reactions/{reaction_id}"],
     deleteForIssueComment: ["DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}"],
     deleteForPullRequestComment: ["DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions/{reaction_id}"],
+    deleteForRelease: ["DELETE /repos/{owner}/{repo}/releases/{release_id}/reactions/{reaction_id}"],
     deleteForTeamDiscussion: ["DELETE /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions/{reaction_id}"],
     deleteForTeamDiscussionComment: ["DELETE /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions/{reaction_id}"],
     listForCommitComment: ["GET /repos/{owner}/{repo}/comments/{comment_id}/reactions"],
     listForIssue: ["GET /repos/{owner}/{repo}/issues/{issue_number}/reactions"],
     listForIssueComment: ["GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"],
     listForPullRequestReviewComment: ["GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"],
+    listForRelease: ["GET /repos/{owner}/{repo}/releases/{release_id}/reactions"],
     listForTeamDiscussionCommentInOrg: ["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions"],
     listForTeamDiscussionInOrg: ["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions"]
   },
@@ -3611,6 +3672,7 @@ const Endpoints = {
     }],
     checkCollaborator: ["GET /repos/{owner}/{repo}/collaborators/{username}"],
     checkVulnerabilityAlerts: ["GET /repos/{owner}/{repo}/vulnerability-alerts"],
+    codeownersErrors: ["GET /repos/{owner}/{repo}/codeowners/errors"],
     compareCommits: ["GET /repos/{owner}/{repo}/compare/{base}...{head}"],
     compareCommitsWithBasehead: ["GET /repos/{owner}/{repo}/compare/{basehead}"],
     createAutolink: ["POST /repos/{owner}/{repo}/autolinks"],
@@ -3628,6 +3690,7 @@ const Endpoints = {
     createOrUpdateFileContents: ["PUT /repos/{owner}/{repo}/contents/{path}"],
     createPagesSite: ["POST /repos/{owner}/{repo}/pages"],
     createRelease: ["POST /repos/{owner}/{repo}/releases"],
+    createTagProtection: ["POST /repos/{owner}/{repo}/tags/protection"],
     createUsingTemplate: ["POST /repos/{template_owner}/{template_repo}/generate"],
     createWebhook: ["POST /repos/{owner}/{repo}/hooks"],
     declineInvitation: ["DELETE /user/repository_invitations/{invitation_id}", {}, {
@@ -3650,6 +3713,7 @@ const Endpoints = {
     deletePullRequestReviewProtection: ["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"],
     deleteRelease: ["DELETE /repos/{owner}/{repo}/releases/{release_id}"],
     deleteReleaseAsset: ["DELETE /repos/{owner}/{repo}/releases/assets/{asset_id}"],
+    deleteTagProtection: ["DELETE /repos/{owner}/{repo}/tags/protection/{tag_protection_id}"],
     deleteWebhook: ["DELETE /repos/{owner}/{repo}/hooks/{hook_id}"],
     disableAutomatedSecurityFixes: ["DELETE /repos/{owner}/{repo}/automated-security-fixes"],
     disableLfsForRepo: ["DELETE /repos/{owner}/{repo}/lfs"],
@@ -3668,11 +3732,7 @@ const Endpoints = {
     getAdminBranchProtection: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"],
     getAllEnvironments: ["GET /repos/{owner}/{repo}/environments"],
     getAllStatusCheckContexts: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"],
-    getAllTopics: ["GET /repos/{owner}/{repo}/topics", {
-      mediaType: {
-        previews: ["mercy"]
-      }
-    }],
+    getAllTopics: ["GET /repos/{owner}/{repo}/topics"],
     getAppsWithAccessToProtectedBranch: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps"],
     getAutolink: ["GET /repos/{owner}/{repo}/autolinks/{autolink_id}"],
     getBranch: ["GET /repos/{owner}/{repo}/branches/{branch}"],
@@ -3738,6 +3798,7 @@ const Endpoints = {
     listPullRequestsAssociatedWithCommit: ["GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls"],
     listReleaseAssets: ["GET /repos/{owner}/{repo}/releases/{release_id}/assets"],
     listReleases: ["GET /repos/{owner}/{repo}/releases"],
+    listTagProtection: ["GET /repos/{owner}/{repo}/tags/protection"],
     listTags: ["GET /repos/{owner}/{repo}/tags"],
     listTeams: ["GET /repos/{owner}/{repo}/teams"],
     listWebhookDeliveries: ["GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries"],
@@ -3761,11 +3822,7 @@ const Endpoints = {
       mapToData: "users"
     }],
     renameBranch: ["POST /repos/{owner}/{repo}/branches/{branch}/rename"],
-    replaceAllTopics: ["PUT /repos/{owner}/{repo}/topics", {
-      mediaType: {
-        previews: ["mercy"]
-      }
-    }],
+    replaceAllTopics: ["PUT /repos/{owner}/{repo}/topics"],
     requestPagesBuild: ["POST /repos/{owner}/{repo}/pages/builds"],
     setAdminBranchProtection: ["POST /repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"],
     setAppAccessRestrictions: ["PUT /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps", {}, {
@@ -3806,17 +3863,15 @@ const Endpoints = {
     issuesAndPullRequests: ["GET /search/issues"],
     labels: ["GET /search/labels"],
     repos: ["GET /search/repositories"],
-    topics: ["GET /search/topics", {
-      mediaType: {
-        previews: ["mercy"]
-      }
-    }],
+    topics: ["GET /search/topics"],
     users: ["GET /search/users"]
   },
   secretScanning: {
     getAlert: ["GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"],
+    listAlertsForEnterprise: ["GET /enterprises/{enterprise}/secret-scanning/alerts"],
     listAlertsForOrg: ["GET /orgs/{org}/secret-scanning/alerts"],
     listAlertsForRepo: ["GET /repos/{owner}/{repo}/secret-scanning/alerts"],
+    listLocationsForAlert: ["GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations"],
     updateAlert: ["PATCH /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"]
   },
   teams: {
@@ -3932,7 +3987,7 @@ const Endpoints = {
   }
 };
 
-const VERSION = "5.13.0";
+const VERSION = "5.16.2";
 
 function endpointsToMethods(octokit, endpointsMap) {
   const newMethods = {};
@@ -4131,7 +4186,7 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 
 var endpoint = __nccwpck_require__(59440);
 var universalUserAgent = __nccwpck_require__(45030);
-var isPlainObject = __nccwpck_require__(49062);
+var isPlainObject = __nccwpck_require__(63287);
 var nodeFetch = _interopDefault(__nccwpck_require__(80467));
 var requestError = __nccwpck_require__(10537);
 
@@ -4300,52 +4355,6 @@ const request = withDefaults(endpoint.endpoint, {
 
 exports.request = request;
 //# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ 49062:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-
-/*!
- * is-plain-object <https://github.com/jonschlinkert/is-plain-object>
- *
- * Copyright (c) 2014-2017, Jon Schlinkert.
- * Released under the MIT License.
- */
-
-function isObject(o) {
-  return Object.prototype.toString.call(o) === '[object Object]';
-}
-
-function isPlainObject(o) {
-  var ctor,prot;
-
-  if (isObject(o) === false) return false;
-
-  // If has modified constructor
-  ctor = o.constructor;
-  if (ctor === undefined) return true;
-
-  // If has modified prototype
-  prot = ctor.prototype;
-  if (isObject(prot) === false) return false;
-
-  // If constructor does not have an Object-specific method
-  if (prot.hasOwnProperty('isPrototypeOf') === false) {
-    return false;
-  }
-
-  // Most likely a plain Object
-  return true;
-}
-
-exports.isPlainObject = isPlainObject;
 
 
 /***/ }),
@@ -8039,63 +8048,67 @@ module.exports = {
 /***/ 83682:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var register = __nccwpck_require__(44670)
-var addHook = __nccwpck_require__(5549)
-var removeHook = __nccwpck_require__(6819)
+var register = __nccwpck_require__(44670);
+var addHook = __nccwpck_require__(5549);
+var removeHook = __nccwpck_require__(6819);
 
 // bind with array of arguments: https://stackoverflow.com/a/21792913
-var bind = Function.bind
-var bindable = bind.bind(bind)
+var bind = Function.bind;
+var bindable = bind.bind(bind);
 
-function bindApi (hook, state, name) {
-  var removeHookRef = bindable(removeHook, null).apply(null, name ? [state, name] : [state])
-  hook.api = { remove: removeHookRef }
-  hook.remove = removeHookRef
-
-  ;['before', 'error', 'after', 'wrap'].forEach(function (kind) {
-    var args = name ? [state, kind, name] : [state, kind]
-    hook[kind] = hook.api[kind] = bindable(addHook, null).apply(null, args)
-  })
+function bindApi(hook, state, name) {
+  var removeHookRef = bindable(removeHook, null).apply(
+    null,
+    name ? [state, name] : [state]
+  );
+  hook.api = { remove: removeHookRef };
+  hook.remove = removeHookRef;
+  ["before", "error", "after", "wrap"].forEach(function (kind) {
+    var args = name ? [state, kind, name] : [state, kind];
+    hook[kind] = hook.api[kind] = bindable(addHook, null).apply(null, args);
+  });
 }
 
-function HookSingular () {
-  var singularHookName = 'h'
+function HookSingular() {
+  var singularHookName = "h";
   var singularHookState = {
-    registry: {}
-  }
-  var singularHook = register.bind(null, singularHookState, singularHookName)
-  bindApi(singularHook, singularHookState, singularHookName)
-  return singularHook
+    registry: {},
+  };
+  var singularHook = register.bind(null, singularHookState, singularHookName);
+  bindApi(singularHook, singularHookState, singularHookName);
+  return singularHook;
 }
 
-function HookCollection () {
+function HookCollection() {
   var state = {
-    registry: {}
-  }
+    registry: {},
+  };
 
-  var hook = register.bind(null, state)
-  bindApi(hook, state)
+  var hook = register.bind(null, state);
+  bindApi(hook, state);
 
-  return hook
+  return hook;
 }
 
-var collectionHookDeprecationMessageDisplayed = false
-function Hook () {
+var collectionHookDeprecationMessageDisplayed = false;
+function Hook() {
   if (!collectionHookDeprecationMessageDisplayed) {
-    console.warn('[before-after-hook]: "Hook()" repurposing warning, use "Hook.Collection()". Read more: https://git.io/upgrade-before-after-hook-to-1.4')
-    collectionHookDeprecationMessageDisplayed = true
+    console.warn(
+      '[before-after-hook]: "Hook()" repurposing warning, use "Hook.Collection()". Read more: https://git.io/upgrade-before-after-hook-to-1.4'
+    );
+    collectionHookDeprecationMessageDisplayed = true;
   }
-  return HookCollection()
+  return HookCollection();
 }
 
-Hook.Singular = HookSingular.bind()
-Hook.Collection = HookCollection.bind()
+Hook.Singular = HookSingular.bind();
+Hook.Collection = HookCollection.bind();
 
-module.exports = Hook
+module.exports = Hook;
 // expose constructors as a named property for TypeScript
-module.exports.Hook = Hook
-module.exports.Singular = Hook.Singular
-module.exports.Collection = Hook.Collection
+module.exports.Hook = Hook;
+module.exports.Singular = Hook.Singular;
+module.exports.Collection = Hook.Collection;
 
 
 /***/ }),
@@ -9456,6 +9469,11 @@ events.forEach(function (event) {
   };
 });
 
+var InvalidUrlError = createErrorType(
+  "ERR_INVALID_URL",
+  "Invalid URL",
+  TypeError
+);
 // Error types with codes
 var RedirectionError = createErrorType(
   "ERR_FR_REDIRECTION_FAILURE",
@@ -9516,10 +9534,10 @@ RedirectableRequest.prototype.write = function (data, encoding, callback) {
   }
 
   // Validate input and shift parameters if necessary
-  if (!(typeof data === "string" || typeof data === "object" && ("length" in data))) {
+  if (!isString(data) && !isBuffer(data)) {
     throw new TypeError("data should be a string, Buffer or Uint8Array");
   }
-  if (typeof encoding === "function") {
+  if (isFunction(encoding)) {
     callback = encoding;
     encoding = null;
   }
@@ -9548,11 +9566,11 @@ RedirectableRequest.prototype.write = function (data, encoding, callback) {
 // Ends the current native request
 RedirectableRequest.prototype.end = function (data, encoding, callback) {
   // Shift parameters if necessary
-  if (typeof data === "function") {
+  if (isFunction(data)) {
     callback = data;
     data = encoding = null;
   }
-  else if (typeof encoding === "function") {
+  else if (isFunction(encoding)) {
     callback = encoding;
     encoding = null;
   }
@@ -9729,7 +9747,7 @@ RedirectableRequest.prototype._performRequest = function () {
     url.format(this._options) :
     // When making a request to a proxy, […]
     // a client MUST send the target URI in absolute-form […].
-    this._currentUrl = this._options.path;
+    this._options.path;
 
   // End a redirected request
   // (The first request must be ended explicitly with RedirectableRequest#end)
@@ -9850,7 +9868,7 @@ RedirectableRequest.prototype._processResponse = function (response) {
     redirectUrl = url.resolve(currentUrl, location);
   }
   catch (cause) {
-    this.emit("error", new RedirectionError(cause));
+    this.emit("error", new RedirectionError({ cause: cause }));
     return;
   }
 
@@ -9870,7 +9888,7 @@ RedirectableRequest.prototype._processResponse = function (response) {
   }
 
   // Evaluate the beforeRedirect callback
-  if (typeof beforeRedirect === "function") {
+  if (isFunction(beforeRedirect)) {
     var responseDetails = {
       headers: response.headers,
       statusCode: statusCode,
@@ -9895,7 +9913,7 @@ RedirectableRequest.prototype._processResponse = function (response) {
     this._performRequest();
   }
   catch (cause) {
-    this.emit("error", new RedirectionError(cause));
+    this.emit("error", new RedirectionError({ cause: cause }));
   }
 };
 
@@ -9917,15 +9935,19 @@ function wrap(protocols) {
     // Executes a request, following redirects
     function request(input, options, callback) {
       // Parse parameters
-      if (typeof input === "string") {
-        var urlStr = input;
+      if (isString(input)) {
+        var parsed;
         try {
-          input = urlToOptions(new URL(urlStr));
+          parsed = urlToOptions(new URL(input));
         }
         catch (err) {
           /* istanbul ignore next */
-          input = url.parse(urlStr);
+          parsed = url.parse(input);
         }
+        if (!isString(parsed.protocol)) {
+          throw new InvalidUrlError({ input });
+        }
+        input = parsed;
       }
       else if (URL && (input instanceof URL)) {
         input = urlToOptions(input);
@@ -9935,7 +9957,7 @@ function wrap(protocols) {
         options = input;
         input = { protocol: protocol };
       }
-      if (typeof options === "function") {
+      if (isFunction(options)) {
         callback = options;
         options = null;
       }
@@ -9946,6 +9968,9 @@ function wrap(protocols) {
         maxBodyLength: exports.maxBodyLength,
       }, input, options);
       options.nativeProtocols = nativeProtocols;
+      if (!isString(options.host) && !isString(options.hostname)) {
+        options.hostname = "::1";
+      }
 
       assert.equal(options.protocol, protocol, "protocol mismatch");
       debug("options", options);
@@ -10003,21 +10028,19 @@ function removeMatchingHeaders(regex, headers) {
     undefined : String(lastValue).trim();
 }
 
-function createErrorType(code, defaultMessage) {
-  function CustomError(cause) {
+function createErrorType(code, message, baseClass) {
+  // Create constructor
+  function CustomError(properties) {
     Error.captureStackTrace(this, this.constructor);
-    if (!cause) {
-      this.message = defaultMessage;
-    }
-    else {
-      this.message = defaultMessage + ": " + cause.message;
-      this.cause = cause;
-    }
+    Object.assign(this, properties || {});
+    this.code = code;
+    this.message = this.cause ? message + ": " + this.cause.message : message;
   }
-  CustomError.prototype = new Error();
+
+  // Attach constructor and set default properties
+  CustomError.prototype = new (baseClass || Error)();
   CustomError.prototype.constructor = CustomError;
   CustomError.prototype.name = "Error [" + code + "]";
-  CustomError.prototype.code = code;
   return CustomError;
 }
 
@@ -10030,8 +10053,21 @@ function abortRequest(request) {
 }
 
 function isSubdomain(subdomain, domain) {
-  const dot = subdomain.length - domain.length - 1;
+  assert(isString(subdomain) && isString(domain));
+  var dot = subdomain.length - domain.length - 1;
   return dot > 0 && subdomain[dot] === "." && subdomain.endsWith(domain);
+}
+
+function isString(value) {
+  return typeof value === "string" || value instanceof String;
+}
+
+function isFunction(value) {
+  return typeof value === "function";
+}
+
+function isBuffer(value) {
+  return typeof value === "object" && ("length" in value);
 }
 
 // Exports
@@ -10582,326 +10618,48 @@ module.exports = (flag, argv = process.argv) => {
 
 /***/ }),
 
-/***/ 89106:
-/***/ ((module) => {
+/***/ 63287:
+/***/ ((__unused_webpack_module, exports) => {
 
-/******************************************************************************
-Copyright (c) Microsoft Corporation.
+"use strict";
 
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted.
 
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-PERFORMANCE OF THIS SOFTWARE.
-***************************************************************************** */
-/* global global, define, System, Reflect, Promise */
-var __extends;
-var __assign;
-var __rest;
-var __decorate;
-var __param;
-var __metadata;
-var __awaiter;
-var __generator;
-var __exportStar;
-var __values;
-var __read;
-var __spread;
-var __spreadArrays;
-var __spreadArray;
-var __await;
-var __asyncGenerator;
-var __asyncDelegator;
-var __asyncValues;
-var __makeTemplateObject;
-var __importStar;
-var __importDefault;
-var __classPrivateFieldGet;
-var __classPrivateFieldSet;
-var __classPrivateFieldIn;
-var __createBinding;
-(function (factory) {
-    var root = typeof global === "object" ? global : typeof self === "object" ? self : typeof this === "object" ? this : {};
-    if (typeof define === "function" && define.amd) {
-        define("tslib", ["exports"], function (exports) { factory(createExporter(root, createExporter(exports))); });
-    }
-    else if ( true && typeof module.exports === "object") {
-        factory(createExporter(root, createExporter(module.exports)));
-    }
-    else {
-        factory(createExporter(root));
-    }
-    function createExporter(exports, previous) {
-        if (exports !== root) {
-            if (typeof Object.create === "function") {
-                Object.defineProperty(exports, "__esModule", { value: true });
-            }
-            else {
-                exports.__esModule = true;
-            }
-        }
-        return function (id, v) { return exports[id] = previous ? previous(id, v) : v; };
-    }
-})
-(function (exporter) {
-    var extendStatics = Object.setPrototypeOf ||
-        ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
-        function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 
-    __extends = function (d, b) {
-        if (typeof b !== "function" && b !== null)
-            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
-        extendStatics(d, b);
-        function __() { this.constructor = d; }
-        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
-    };
+/*!
+ * is-plain-object <https://github.com/jonschlinkert/is-plain-object>
+ *
+ * Copyright (c) 2014-2017, Jon Schlinkert.
+ * Released under the MIT License.
+ */
 
-    __assign = Object.assign || function (t) {
-        for (var s, i = 1, n = arguments.length; i < n; i++) {
-            s = arguments[i];
-            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p)) t[p] = s[p];
-        }
-        return t;
-    };
+function isObject(o) {
+  return Object.prototype.toString.call(o) === '[object Object]';
+}
 
-    __rest = function (s, e) {
-        var t = {};
-        for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
-            t[p] = s[p];
-        if (s != null && typeof Object.getOwnPropertySymbols === "function")
-            for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
-                if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
-                    t[p[i]] = s[p[i]];
-            }
-        return t;
-    };
+function isPlainObject(o) {
+  var ctor,prot;
 
-    __decorate = function (decorators, target, key, desc) {
-        var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-        if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-        else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-        return c > 3 && r && Object.defineProperty(target, key, r), r;
-    };
+  if (isObject(o) === false) return false;
 
-    __param = function (paramIndex, decorator) {
-        return function (target, key) { decorator(target, key, paramIndex); }
-    };
+  // If has modified constructor
+  ctor = o.constructor;
+  if (ctor === undefined) return true;
 
-    __metadata = function (metadataKey, metadataValue) {
-        if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(metadataKey, metadataValue);
-    };
+  // If has modified prototype
+  prot = ctor.prototype;
+  if (isObject(prot) === false) return false;
 
-    __awaiter = function (thisArg, _arguments, P, generator) {
-        function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-        return new (P || (P = Promise))(function (resolve, reject) {
-            function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-            function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-            function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-            step((generator = generator.apply(thisArg, _arguments || [])).next());
-        });
-    };
+  // If constructor does not have an Object-specific method
+  if (prot.hasOwnProperty('isPrototypeOf') === false) {
+    return false;
+  }
 
-    __generator = function (thisArg, body) {
-        var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-        return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
-        function verb(n) { return function (v) { return step([n, v]); }; }
-        function step(op) {
-            if (f) throw new TypeError("Generator is already executing.");
-            while (_) try {
-                if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
-                if (y = 0, t) op = [op[0] & 2, t.value];
-                switch (op[0]) {
-                    case 0: case 1: t = op; break;
-                    case 4: _.label++; return { value: op[1], done: false };
-                    case 5: _.label++; y = op[1]; op = [0]; continue;
-                    case 7: op = _.ops.pop(); _.trys.pop(); continue;
-                    default:
-                        if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
-                        if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
-                        if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
-                        if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
-                        if (t[2]) _.ops.pop();
-                        _.trys.pop(); continue;
-                }
-                op = body.call(thisArg, _);
-            } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
-            if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
-        }
-    };
+  // Most likely a plain Object
+  return true;
+}
 
-    __exportStar = function(m, o) {
-        for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(o, p)) __createBinding(o, m, p);
-    };
-
-    __createBinding = Object.create ? (function(o, m, k, k2) {
-        if (k2 === undefined) k2 = k;
-        var desc = Object.getOwnPropertyDescriptor(m, k);
-        if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-            desc = { enumerable: true, get: function() { return m[k]; } };
-        }
-        Object.defineProperty(o, k2, desc);
-    }) : (function(o, m, k, k2) {
-        if (k2 === undefined) k2 = k;
-        o[k2] = m[k];
-    });
-
-    __values = function (o) {
-        var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
-        if (m) return m.call(o);
-        if (o && typeof o.length === "number") return {
-            next: function () {
-                if (o && i >= o.length) o = void 0;
-                return { value: o && o[i++], done: !o };
-            }
-        };
-        throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
-    };
-
-    __read = function (o, n) {
-        var m = typeof Symbol === "function" && o[Symbol.iterator];
-        if (!m) return o;
-        var i = m.call(o), r, ar = [], e;
-        try {
-            while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
-        }
-        catch (error) { e = { error: error }; }
-        finally {
-            try {
-                if (r && !r.done && (m = i["return"])) m.call(i);
-            }
-            finally { if (e) throw e.error; }
-        }
-        return ar;
-    };
-
-    /** @deprecated */
-    __spread = function () {
-        for (var ar = [], i = 0; i < arguments.length; i++)
-            ar = ar.concat(__read(arguments[i]));
-        return ar;
-    };
-
-    /** @deprecated */
-    __spreadArrays = function () {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-            for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-                r[k] = a[j];
-        return r;
-    };
-
-    __spreadArray = function (to, from, pack) {
-        if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
-            if (ar || !(i in from)) {
-                if (!ar) ar = Array.prototype.slice.call(from, 0, i);
-                ar[i] = from[i];
-            }
-        }
-        return to.concat(ar || Array.prototype.slice.call(from));
-    };
-
-    __await = function (v) {
-        return this instanceof __await ? (this.v = v, this) : new __await(v);
-    };
-
-    __asyncGenerator = function (thisArg, _arguments, generator) {
-        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
-        var g = generator.apply(thisArg, _arguments || []), i, q = [];
-        return i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i;
-        function verb(n) { if (g[n]) i[n] = function (v) { return new Promise(function (a, b) { q.push([n, v, a, b]) > 1 || resume(n, v); }); }; }
-        function resume(n, v) { try { step(g[n](v)); } catch (e) { settle(q[0][3], e); } }
-        function step(r) { r.value instanceof __await ? Promise.resolve(r.value.v).then(fulfill, reject) : settle(q[0][2], r);  }
-        function fulfill(value) { resume("next", value); }
-        function reject(value) { resume("throw", value); }
-        function settle(f, v) { if (f(v), q.shift(), q.length) resume(q[0][0], q[0][1]); }
-    };
-
-    __asyncDelegator = function (o) {
-        var i, p;
-        return i = {}, verb("next"), verb("throw", function (e) { throw e; }), verb("return"), i[Symbol.iterator] = function () { return this; }, i;
-        function verb(n, f) { i[n] = o[n] ? function (v) { return (p = !p) ? { value: __await(o[n](v)), done: n === "return" } : f ? f(v) : v; } : f; }
-    };
-
-    __asyncValues = function (o) {
-        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
-        var m = o[Symbol.asyncIterator], i;
-        return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
-        function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
-        function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
-    };
-
-    __makeTemplateObject = function (cooked, raw) {
-        if (Object.defineProperty) { Object.defineProperty(cooked, "raw", { value: raw }); } else { cooked.raw = raw; }
-        return cooked;
-    };
-
-    var __setModuleDefault = Object.create ? (function(o, v) {
-        Object.defineProperty(o, "default", { enumerable: true, value: v });
-    }) : function(o, v) {
-        o["default"] = v;
-    };
-
-    __importStar = function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-
-    __importDefault = function (mod) {
-        return (mod && mod.__esModule) ? mod : { "default": mod };
-    };
-
-    __classPrivateFieldGet = function (receiver, state, kind, f) {
-        if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
-        if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
-        return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
-    };
-
-    __classPrivateFieldSet = function (receiver, state, value, kind, f) {
-        if (kind === "m") throw new TypeError("Private method is not writable");
-        if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
-        if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
-        return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
-    };
-
-    __classPrivateFieldIn = function (state, receiver) {
-        if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) throw new TypeError("Cannot use 'in' operator on non-object");
-        return typeof state === "function" ? receiver === state : state.has(receiver);
-    };
-
-    exporter("__extends", __extends);
-    exporter("__assign", __assign);
-    exporter("__rest", __rest);
-    exporter("__decorate", __decorate);
-    exporter("__param", __param);
-    exporter("__metadata", __metadata);
-    exporter("__awaiter", __awaiter);
-    exporter("__generator", __generator);
-    exporter("__exportStar", __exportStar);
-    exporter("__createBinding", __createBinding);
-    exporter("__values", __values);
-    exporter("__read", __read);
-    exporter("__spread", __spread);
-    exporter("__spreadArrays", __spreadArrays);
-    exporter("__spreadArray", __spreadArray);
-    exporter("__await", __await);
-    exporter("__asyncGenerator", __asyncGenerator);
-    exporter("__asyncDelegator", __asyncDelegator);
-    exporter("__asyncValues", __asyncValues);
-    exporter("__makeTemplateObject", __makeTemplateObject);
-    exporter("__importStar", __importStar);
-    exporter("__importDefault", __importDefault);
-    exporter("__classPrivateFieldGet", __classPrivateFieldGet);
-    exporter("__classPrivateFieldSet", __classPrivateFieldSet);
-    exporter("__classPrivateFieldIn", __classPrivateFieldIn);
-});
+exports.isPlainObject = isPlainObject;
 
 
 /***/ }),
@@ -10913,7 +10671,7 @@ var __createBinding;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Backlog = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Backlog {
     constructor(client) {
         this.client = client;
@@ -10924,7 +10682,7 @@ class Backlog {
                 url: '/rest/agile/1.0/backlog/issue',
                 method: 'POST',
                 data: {
-                    issues: parameters === null || parameters === void 0 ? void 0 : parameters.issues,
+                    issues: parameters.issues,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -10958,7 +10716,7 @@ exports.Backlog = Backlog;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Board = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Board {
     constructor(client) {
         this.client = client;
@@ -10992,10 +10750,10 @@ class Board {
                 url: '/rest/agile/1.0/board',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    type: parameters === null || parameters === void 0 ? void 0 : parameters.type,
-                    filterId: parameters === null || parameters === void 0 ? void 0 : parameters.filterId,
-                    location: parameters === null || parameters === void 0 ? void 0 : parameters.location,
+                    name: parameters.name,
+                    type: parameters.type,
+                    filterId: parameters.filterId,
+                    location: parameters.location,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -11304,7 +11062,7 @@ exports.Board = Board;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Builds = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Builds {
     constructor(client) {
         this.client = client;
@@ -11315,9 +11073,9 @@ class Builds {
                 url: '/rest/builds/0.1/bulk',
                 method: 'POST',
                 data: {
-                    properties: parameters === null || parameters === void 0 ? void 0 : parameters.properties,
-                    builds: parameters === null || parameters === void 0 ? void 0 : parameters.builds,
-                    providerMetadata: parameters === null || parameters === void 0 ? void 0 : parameters.providerMetadata,
+                    properties: parameters.properties,
+                    builds: parameters.builds,
+                    providerMetadata: parameters.providerMetadata,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -11329,7 +11087,7 @@ class Builds {
                 url: '/rest/builds/0.1/bulkByProperties',
                 method: 'DELETE',
                 params: {
-                    _updateSequenceNumber: (parameters === null || parameters === void 0 ? void 0 : parameters._updateSequenceNumber) || (parameters === null || parameters === void 0 ? void 0 : parameters.updateSequenceNumber),
+                    _updateSequenceNumber: parameters._updateSequenceNumber || parameters.updateSequenceNumber,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -11384,6 +11142,7 @@ class AgileClient extends clients_1.BaseClient {
         this.issue = new __1.Issue(this);
         this.project = new __1.Project(this);
         this.remoteLinks = new __1.RemoteLinks(this);
+        this.securityInformation = new __1.SecurityInformation(this);
         this.sprint = new __1.Sprint(this);
     }
 }
@@ -11398,7 +11157,7 @@ exports.AgileClient = AgileClient;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(49932), exports);
 //# sourceMappingURL=index.js.map
 
@@ -11411,7 +11170,7 @@ tslib_1.__exportStar(__nccwpck_require__(49932), exports);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Deployments = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Deployments {
     constructor(client) {
         this.client = client;
@@ -11422,9 +11181,9 @@ class Deployments {
                 url: '/rest/deployments/0.1/bulk',
                 method: 'POST',
                 data: {
-                    properties: parameters === null || parameters === void 0 ? void 0 : parameters.properties,
-                    deployments: parameters === null || parameters === void 0 ? void 0 : parameters.deployments,
-                    providerMetadata: parameters === null || parameters === void 0 ? void 0 : parameters.providerMetadata,
+                    properties: parameters.properties,
+                    deployments: parameters.deployments,
+                    providerMetadata: parameters.providerMetadata,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -11436,7 +11195,7 @@ class Deployments {
                 url: '/rest/deployments/0.1/bulkByProperties',
                 method: 'DELETE',
                 params: {
-                    _updateSequenceNumber: (parameters === null || parameters === void 0 ? void 0 : parameters._updateSequenceNumber) || (parameters === null || parameters === void 0 ? void 0 : parameters.updateSequenceNumber),
+                    _updateSequenceNumber: parameters._updateSequenceNumber || parameters.updateSequenceNumber,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -11485,7 +11244,7 @@ exports.Deployments = Deployments;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DevelopmentInformation = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class DevelopmentInformation {
     constructor(client) {
         this.client = client;
@@ -11498,6 +11257,7 @@ class DevelopmentInformation {
                 data: {
                     repositories: parameters.repositories,
                     preventTransitions: parameters.preventTransitions,
+                    operationType: parameters.operationType,
                     properties: parameters.properties,
                     providerMetadata: parameters.providerMetadata,
                 },
@@ -11575,7 +11335,7 @@ exports.DevelopmentInformation = DevelopmentInformation;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Epic = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Epic {
     constructor(client) {
         this.client = client;
@@ -11704,7 +11464,7 @@ exports.Epic = Epic;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.FeatureFlags = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class FeatureFlags {
     constructor(client) {
         this.client = client;
@@ -11715,9 +11475,9 @@ class FeatureFlags {
                 url: '/rest/featureflags/0.1/bulk',
                 method: 'POST',
                 data: {
-                    properties: parameters === null || parameters === void 0 ? void 0 : parameters.properties,
-                    flags: parameters === null || parameters === void 0 ? void 0 : parameters.flags,
-                    providerMetadata: parameters === null || parameters === void 0 ? void 0 : parameters.providerMetadata,
+                    properties: parameters.properties,
+                    flags: parameters.flags,
+                    providerMetadata: parameters.providerMetadata,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -11769,7 +11529,7 @@ exports.FeatureFlags = FeatureFlags;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AgileParameters = exports.AgileModels = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(51426), exports);
 tslib_1.__exportStar(__nccwpck_require__(28264), exports);
 tslib_1.__exportStar(__nccwpck_require__(59344), exports);
@@ -11780,6 +11540,7 @@ tslib_1.__exportStar(__nccwpck_require__(47243), exports);
 tslib_1.__exportStar(__nccwpck_require__(70054), exports);
 tslib_1.__exportStar(__nccwpck_require__(530), exports);
 tslib_1.__exportStar(__nccwpck_require__(49766), exports);
+tslib_1.__exportStar(__nccwpck_require__(30168), exports);
 tslib_1.__exportStar(__nccwpck_require__(4406), exports);
 exports.AgileModels = __nccwpck_require__(25695);
 exports.AgileParameters = __nccwpck_require__(48324);
@@ -11795,7 +11556,7 @@ tslib_1.__exportStar(__nccwpck_require__(2537), exports);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Issue = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Issue {
     constructor(client) {
         this.client = client;
@@ -12358,7 +12119,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(68614), exports);
 tslib_1.__exportStar(__nccwpck_require__(82442), exports);
 tslib_1.__exportStar(__nccwpck_require__(24624), exports);
@@ -12413,6 +12174,8 @@ tslib_1.__exportStar(__nccwpck_require__(61987), exports);
 tslib_1.__exportStar(__nccwpck_require__(32516), exports);
 tslib_1.__exportStar(__nccwpck_require__(72376), exports);
 tslib_1.__exportStar(__nccwpck_require__(92160), exports);
+tslib_1.__exportStar(__nccwpck_require__(27232), exports);
+tslib_1.__exportStar(__nccwpck_require__(48517), exports);
 tslib_1.__exportStar(__nccwpck_require__(47298), exports);
 tslib_1.__exportStar(__nccwpck_require__(67566), exports);
 tslib_1.__exportStar(__nccwpck_require__(86121), exports);
@@ -12440,11 +12203,13 @@ tslib_1.__exportStar(__nccwpck_require__(73436), exports);
 tslib_1.__exportStar(__nccwpck_require__(94758), exports);
 tslib_1.__exportStar(__nccwpck_require__(63270), exports);
 tslib_1.__exportStar(__nccwpck_require__(50453), exports);
+tslib_1.__exportStar(__nccwpck_require__(25923), exports);
 tslib_1.__exportStar(__nccwpck_require__(11329), exports);
 tslib_1.__exportStar(__nccwpck_require__(10290), exports);
 tslib_1.__exportStar(__nccwpck_require__(82497), exports);
-tslib_1.__exportStar(__nccwpck_require__(97775), exports);
+tslib_1.__exportStar(__nccwpck_require__(2245), exports);
 tslib_1.__exportStar(__nccwpck_require__(39076), exports);
+tslib_1.__exportStar(__nccwpck_require__(91419), exports);
 //# sourceMappingURL=index.js.map
 
 /***/ }),
@@ -12506,6 +12271,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=linkGroup.js.map
+
+/***/ }),
+
+/***/ 27232:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=linkedSecurityWorkspaceIds.js.map
+
+/***/ }),
+
+/***/ 48517:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=linkedWorkspace.js.map
 
 /***/ }),
 
@@ -12779,6 +12564,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 25923:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=submittedVulnerabilitiesResult.js.map
+
+/***/ }),
+
 /***/ 11329:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -12799,6 +12594,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 2245:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=user.js.map
+
+/***/ }),
+
 /***/ 82497:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -12809,16 +12614,6 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
-/***/ 97775:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-//# sourceMappingURL=userJson.js.map
-
-/***/ }),
-
 /***/ 39076:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -12826,6 +12621,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=version.js.map
+
+/***/ }),
+
+/***/ 91419:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=vulnerability.js.map
 
 /***/ }),
 
@@ -12949,6 +12754,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 71364:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteLinkedWorkspaces.js.map
+
+/***/ }),
+
 /***/ 17063:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -12996,6 +12811,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=deleteSprint.js.map
+
+/***/ }),
+
+/***/ 71691:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteVulnerabilitiesByProperty.js.map
+
+/***/ }),
+
+/***/ 26617:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteVulnerabilityById.js.map
 
 /***/ }),
 
@@ -13289,6 +13124,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 84798:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=getLinkedWorkspaceById.js.map
+
+/***/ }),
+
 /***/ 35279:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -13379,13 +13224,23 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 89371:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=getVulnerabilityById.js.map
+
+/***/ }),
+
 /***/ 48324:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(61288), exports);
 tslib_1.__exportStar(__nccwpck_require__(67994), exports);
 tslib_1.__exportStar(__nccwpck_require__(13632), exports);
@@ -13398,11 +13253,14 @@ tslib_1.__exportStar(__nccwpck_require__(42798), exports);
 tslib_1.__exportStar(__nccwpck_require__(27886), exports);
 tslib_1.__exportStar(__nccwpck_require__(30816), exports);
 tslib_1.__exportStar(__nccwpck_require__(23471), exports);
+tslib_1.__exportStar(__nccwpck_require__(71364), exports);
 tslib_1.__exportStar(__nccwpck_require__(17063), exports);
 tslib_1.__exportStar(__nccwpck_require__(5208), exports);
 tslib_1.__exportStar(__nccwpck_require__(94911), exports);
 tslib_1.__exportStar(__nccwpck_require__(50176), exports);
 tslib_1.__exportStar(__nccwpck_require__(82284), exports);
+tslib_1.__exportStar(__nccwpck_require__(71691), exports);
+tslib_1.__exportStar(__nccwpck_require__(26617), exports);
 tslib_1.__exportStar(__nccwpck_require__(6081), exports);
 tslib_1.__exportStar(__nccwpck_require__(77255), exports);
 tslib_1.__exportStar(__nccwpck_require__(93087), exports);
@@ -13432,6 +13290,7 @@ tslib_1.__exportStar(__nccwpck_require__(30162), exports);
 tslib_1.__exportStar(__nccwpck_require__(9291), exports);
 tslib_1.__exportStar(__nccwpck_require__(19230), exports);
 tslib_1.__exportStar(__nccwpck_require__(71683), exports);
+tslib_1.__exportStar(__nccwpck_require__(84798), exports);
 tslib_1.__exportStar(__nccwpck_require__(35279), exports);
 tslib_1.__exportStar(__nccwpck_require__(85257), exports);
 tslib_1.__exportStar(__nccwpck_require__(17370), exports);
@@ -13441,6 +13300,7 @@ tslib_1.__exportStar(__nccwpck_require__(65981), exports);
 tslib_1.__exportStar(__nccwpck_require__(40100), exports);
 tslib_1.__exportStar(__nccwpck_require__(77456), exports);
 tslib_1.__exportStar(__nccwpck_require__(92038), exports);
+tslib_1.__exportStar(__nccwpck_require__(89371), exports);
 tslib_1.__exportStar(__nccwpck_require__(37360), exports);
 tslib_1.__exportStar(__nccwpck_require__(11963), exports);
 tslib_1.__exportStar(__nccwpck_require__(51138), exports);
@@ -13459,6 +13319,8 @@ tslib_1.__exportStar(__nccwpck_require__(86453), exports);
 tslib_1.__exportStar(__nccwpck_require__(29509), exports);
 tslib_1.__exportStar(__nccwpck_require__(65292), exports);
 tslib_1.__exportStar(__nccwpck_require__(61383), exports);
+tslib_1.__exportStar(__nccwpck_require__(81619), exports);
+tslib_1.__exportStar(__nccwpck_require__(39940), exports);
 tslib_1.__exportStar(__nccwpck_require__(96995), exports);
 tslib_1.__exportStar(__nccwpck_require__(80284), exports);
 tslib_1.__exportStar(__nccwpck_require__(57160), exports);
@@ -13646,6 +13508,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 81619:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=submitVulnerabilities.js.map
+
+/***/ }),
+
+/***/ 39940:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=submitWorkspaces.js.map
+
+/***/ }),
+
 /***/ 96995:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -13683,7 +13565,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Project = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
+/** @deprecated Will be removed in the next major version. */
 class Project {
     constructor(client) {
         this.client = client;
@@ -13710,7 +13593,7 @@ exports.Project = Project;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.RemoteLinks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class RemoteLinks {
     constructor(client) {
         this.client = client;
@@ -13721,9 +13604,9 @@ class RemoteLinks {
                 url: '/rest/remotelinks/1.0/bulk',
                 method: 'POST',
                 data: {
-                    properties: parameters === null || parameters === void 0 ? void 0 : parameters.properties,
-                    remoteLinks: parameters === null || parameters === void 0 ? void 0 : parameters.remoteLinks,
-                    providerMetadata: parameters === null || parameters === void 0 ? void 0 : parameters.providerMetadata,
+                    properties: parameters.properties,
+                    remoteLinks: parameters.remoteLinks,
+                    providerMetadata: parameters.providerMetadata,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -13735,8 +13618,8 @@ class RemoteLinks {
                 url: '/rest/remotelinks/1.0/bulkByProperties',
                 method: 'DELETE',
                 params: {
-                    _updateSequenceNumber: (parameters === null || parameters === void 0 ? void 0 : parameters._updateSequenceNumber) || (parameters === null || parameters === void 0 ? void 0 : parameters.updateSequenceNumber),
-                    params: parameters === null || parameters === void 0 ? void 0 : parameters.params,
+                    _updateSequenceNumber: parameters._updateSequenceNumber || parameters.updateSequenceNumber,
+                    params: parameters.params,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -13769,6 +13652,108 @@ exports.RemoteLinks = RemoteLinks;
 
 /***/ }),
 
+/***/ 30168:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SecurityInformation = void 0;
+const tslib_1 = __nccwpck_require__(4351);
+class SecurityInformation {
+    constructor(client) {
+        this.client = client;
+    }
+    submitWorkspaces(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/security/1.0/linkedWorkspaces/bulk',
+                method: 'POST',
+                data: {
+                    workspaceIds: parameters.workspaceIds,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteLinkedWorkspaces(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/security/1.0/linkedWorkspaces/bulk',
+                method: 'DELETE',
+                params: {
+                    workspaceIds: parameters.workspaceIds,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getLinkedWorkspaces(callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/security/1.0/linkedWorkspaces',
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getLinkedWorkspaceById(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/security/1.0/linkedWorkspaces/${parameters.workspaceId}`,
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    submitVulnerabilities(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/security/1.0/bulk',
+                method: 'POST',
+                data: {
+                    properties: parameters.properties,
+                    vulnerabilities: parameters.vulnerabilities,
+                    providerMetadata: parameters.providerMetadata,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteVulnerabilitiesByProperty(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/security/1.0/bulkByProperties',
+                method: 'DELETE',
+                params: parameters,
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getVulnerabilityById(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/security/1.0/vulnerability/${parameters.vulnerabilityId}`,
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteVulnerabilityById(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/security/1.0/vulnerability/${parameters.vulnerabilityId}`,
+                method: 'DELETE',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+}
+exports.SecurityInformation = SecurityInformation;
+//# sourceMappingURL=securityInformation.js.map
+
+/***/ }),
+
 /***/ 4406:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -13776,7 +13761,7 @@ exports.RemoteLinks = RemoteLinks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Sprint = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Sprint {
     constructor(client) {
         this.client = client;
@@ -13787,11 +13772,11 @@ class Sprint {
                 url: '/rest/agile/1.0/sprint',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    startDate: parameters === null || parameters === void 0 ? void 0 : parameters.startDate,
-                    endDate: parameters === null || parameters === void 0 ? void 0 : parameters.endDate,
-                    originBoardId: parameters === null || parameters === void 0 ? void 0 : parameters.originBoardId,
-                    goal: parameters === null || parameters === void 0 ? void 0 : parameters.goal,
+                    name: parameters.name,
+                    startDate: parameters.startDate,
+                    endDate: parameters.endDate,
+                    originBoardId: parameters.originBoardId,
+                    goal: parameters.goal,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -13960,7 +13945,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.BaseClient = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const authenticationService_1 = __nccwpck_require__(21432);
 const axios_1 = __nccwpck_require__(96545);
 const STRICT_GDPR_FLAG = 'x-atlassian-force-account-id';
@@ -13970,10 +13955,13 @@ class BaseClient {
     constructor(config) {
         var _a;
         this.config = config;
-        this.instance = axios_1.default.create(Object.assign(Object.assign({ paramsSerializer: this.paramSerializer.bind(this) }, config.baseRequestConfig), { baseURL: config.host, headers: this.removeUndefinedProperties(Object.assign({ [STRICT_GDPR_FLAG]: config.strictGDPR, [ATLASSIAN_TOKEN_CHECK_FLAG]: config.noCheckAtlassianToken ? ATLASSIAN_TOKEN_CHECK_NOCHECK_VALUE : undefined }, (_a = config.baseRequestConfig) === null || _a === void 0 ? void 0 : _a.headers)) }));
-        if (this.config.newErrorHandling === undefined) {
-            console.log('Jira.js: Deprecation warning: New error handling mechanism added. Please use `newErrorHandling: true` in config');
+        try {
+            new URL(config.host);
         }
+        catch (e) {
+            throw new Error('Couldn\'t parse the host URL. Perhaps you forgot to add \'http://\' or \'https://\' at the beginning of the URL?');
+        }
+        this.instance = axios_1.default.create(Object.assign(Object.assign({ paramsSerializer: this.paramSerializer.bind(this) }, config.baseRequestConfig), { baseURL: config.host, headers: this.removeUndefinedProperties(Object.assign({ [STRICT_GDPR_FLAG]: config.strictGDPR, [ATLASSIAN_TOKEN_CHECK_FLAG]: config.noCheckAtlassianToken ? ATLASSIAN_TOKEN_CHECK_NOCHECK_VALUE : undefined }, (_a = config.baseRequestConfig) === null || _a === void 0 ? void 0 : _a.headers)) }));
     }
     paramSerializer(parameters) {
         const parts = [];
@@ -14067,7 +14055,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ServiceDeskParameters = exports.ServiceDeskModels = exports.ServiceDeskClient = exports.Version3Parameters = exports.Version3Models = exports.Version3Client = exports.Version2Parameters = exports.Version2Models = exports.Version2Client = exports.AgileParameters = exports.AgileModels = exports.AgileClient = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(24424), exports);
 tslib_1.__exportStar(__nccwpck_require__(27894), exports);
 var agile_1 = __nccwpck_require__(51524);
@@ -14145,7 +14133,7 @@ exports.createClient = createClient;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ServiceDesk = exports.Version3 = exports.Version2 = exports.Agile = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(33788), exports);
 tslib_1.__exportStar(__nccwpck_require__(13272), exports);
 tslib_1.__exportStar(__nccwpck_require__(54368), exports);
@@ -14208,7 +14196,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(93556), exports);
 //# sourceMappingURL=index.js.map
 
@@ -14255,7 +14243,7 @@ exports.ServiceDeskClient = ServiceDeskClient;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Customer = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Customer {
     constructor(client) {
         this.client = client;
@@ -14286,7 +14274,7 @@ exports.Customer = Customer;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ServiceDeskParameters = exports.ServiceDeskModels = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(40673), exports);
 tslib_1.__exportStar(__nccwpck_require__(53132), exports);
 tslib_1.__exportStar(__nccwpck_require__(93002), exports);
@@ -14309,7 +14297,7 @@ tslib_1.__exportStar(__nccwpck_require__(81343), exports);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Info = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Info {
     constructor(client) {
         this.client = client;
@@ -14336,7 +14324,7 @@ exports.Info = Info;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Insight = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Insight {
     constructor(client) {
         this.client = client;
@@ -14367,7 +14355,7 @@ exports.Insight = Insight;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.KnowledgeBase = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class KnowledgeBase {
     constructor(client) {
         this.client = client;
@@ -14762,7 +14750,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(7210), exports);
 tslib_1.__exportStar(__nccwpck_require__(43075), exports);
 tslib_1.__exportStar(__nccwpck_require__(42366), exports);
@@ -15481,7 +15469,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Organization = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Organization {
     constructor(client) {
         this.client = client;
@@ -16193,7 +16181,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(84403), exports);
 tslib_1.__exportStar(__nccwpck_require__(49224), exports);
 tslib_1.__exportStar(__nccwpck_require__(55112), exports);
@@ -16375,7 +16363,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Request = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Request {
     constructor(client) {
         this.client = client;
@@ -16747,7 +16735,7 @@ exports.Request = Request;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.RequestType = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class RequestType {
     constructor(client) {
         this.client = client;
@@ -16784,7 +16772,7 @@ exports.RequestType = RequestType;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ServiceDesk = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const FormData = __nccwpck_require__(64334);
 class ServiceDesk {
     constructor(client) {
@@ -17074,7 +17062,7 @@ exports.ServiceDesk = ServiceDesk;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AuthenticationService = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const authentications_1 = __nccwpck_require__(91208);
 var AuthenticationService;
 (function (AuthenticationService) {
@@ -17143,9 +17131,10 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createJWTAuthentication = void 0;
 const jwt = __nccwpck_require__(24644);
 function createJWTAuthentication(authenticationData, requestData) {
+    var _a;
     const { method, url } = requestData;
     const now = Math.floor(Date.now() / 1000);
-    const expire = now + 180;
+    const expire = now + ((_a = authenticationData.expiryTimeSeconds) !== null && _a !== void 0 ? _a : 180);
     const request = jwt.fromMethodAndUrl(method, url);
     const tokenData = {
         iss: authenticationData.issuer,
@@ -17216,7 +17205,7 @@ exports.createPATAuthentication = createPATAuthentication;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(81503), exports);
 tslib_1.__exportStar(__nccwpck_require__(7811), exports);
 tslib_1.__exportStar(__nccwpck_require__(53140), exports);
@@ -17298,7 +17287,7 @@ var Base64Encoder;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(38122), exports);
 //# sourceMappingURL=index.js.map
 
@@ -17321,7 +17310,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AnnouncementBanner = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AnnouncementBanner {
     constructor(client) {
         this.client = client;
@@ -17341,9 +17330,9 @@ class AnnouncementBanner {
                 url: '/rest/api/2/announcementBanner',
                 method: 'PUT',
                 data: {
-                    message: parameters.message,
                     isDismissible: parameters.isDismissible,
                     isEnabled: parameters.isEnabled,
+                    message: parameters.message,
                     visibility: parameters.visibility,
                 },
             };
@@ -17363,7 +17352,7 @@ exports.AnnouncementBanner = AnnouncementBanner;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppMigration = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AppMigration {
     constructor(client) {
         this.client = client;
@@ -17374,8 +17363,8 @@ class AppMigration {
                 url: '/rest/atlassian-connect/1/migration/field',
                 method: 'PUT',
                 headers: {
-                    'Atlassian-Transfer-Id': parameters.transferId,
                     'Atlassian-Account-Id': parameters.accountId,
+                    'Atlassian-Transfer-Id': parameters.transferId,
                 },
                 data: {
                     updateValueList: parameters.updateValueList,
@@ -17391,9 +17380,9 @@ class AppMigration {
                 url: `/rest/atlassian-connect/1/migration/properties/${parameters.entityType}`,
                 method: 'PUT',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Atlassian-Transfer-Id': parameters.transferId,
                     'Atlassian-Account-Id': parameters.accountId,
+                    'Atlassian-Transfer-Id': parameters.transferId,
+                    'Content-Type': 'application/json',
                 },
                 data: (_a = parameters.body) !== null && _a !== void 0 ? _a : parameters.entities,
             };
@@ -17409,9 +17398,9 @@ class AppMigration {
                     'Atlassian-Transfer-Id': parameters.transferId,
                 },
                 data: {
-                    workflowEntityId: parameters.workflowEntityId,
-                    ruleIds: parameters.ruleIds,
                     expand: parameters.expand,
+                    ruleIds: parameters.ruleIds,
+                    workflowEntityId: parameters.workflowEntityId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -17430,15 +17419,16 @@ exports.AppMigration = AppMigration;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AppProperties {
     constructor(client) {
         this.client = client;
     }
     getAddonProperties(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const addonKey = typeof parameters === 'string' ? parameters : parameters.addonKey;
             const config = {
-                url: `/rest/atlassian-connect/1/addons/${parameters.addonKey}/properties`,
+                url: `/rest/atlassian-connect/1/addons/${addonKey}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -17458,6 +17448,7 @@ class AppProperties {
             const config = {
                 url: `/rest/atlassian-connect/1/addons/${parameters.addonKey}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.property,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -17484,7 +17475,7 @@ exports.AppProperties = AppProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ApplicationRoles = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ApplicationRoles {
     constructor(client) {
         this.client = client;
@@ -17500,8 +17491,9 @@ class ApplicationRoles {
     }
     getApplicationRole(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const key = typeof parameters === 'string' ? parameters : parameters.key;
             const config = {
-                url: `/rest/api/2/applicationrole/${parameters.key}`,
+                url: `/rest/api/2/applicationrole/${key}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -17520,7 +17512,7 @@ exports.ApplicationRoles = ApplicationRoles;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AuditRecords = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AuditRecords {
     constructor(client) {
         this.client = client;
@@ -17554,15 +17546,16 @@ exports.AuditRecords = AuditRecords;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Avatars = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Avatars {
     constructor(client) {
         this.client = client;
     }
     getAllSystemAvatars(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const type = typeof parameters === 'string' ? parameters : parameters.type;
             const config = {
-                url: `/rest/api/2/avatar/${parameters.type}/system`,
+                url: `/rest/api/2/avatar/${type}/system`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -17602,12 +17595,13 @@ class Avatars {
     }
     getAvatarImageByType(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const type = typeof parameters === 'string' ? parameters : parameters.type;
             const config = {
-                url: `/rest/api/2/universal_avatar/view/type/${parameters.type}`,
+                url: `/rest/api/2/universal_avatar/view/type/${type}`,
                 method: 'GET',
                 params: {
-                    size: parameters.size,
-                    format: parameters.format,
+                    size: typeof parameters !== 'string' && parameters.size,
+                    format: typeof parameters !== 'string' && parameters.format,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -17651,7 +17645,7 @@ exports.Avatars = Avatars;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(86910), exports);
 //# sourceMappingURL=index.js.map
 
@@ -17717,6 +17711,7 @@ class Version2Client extends clients_1.BaseClient {
         this.jiraSettings = new __1.JiraSettings(this);
         this.jql = new __1.JQL(this);
         this.labels = new __1.Labels(this);
+        this.licenseMetrics = new __1.LicenseMetrics(this);
         this.myself = new __1.Myself(this);
         this.permissions = new __1.Permissions(this);
         this.permissionSchemes = new __1.PermissionSchemes(this);
@@ -17768,7 +17763,7 @@ exports.Version2Client = Version2Client;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Dashboards = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const paramSerializer_1 = __nccwpck_require__(52517);
 class Dashboards {
     constructor(client) {
@@ -17911,6 +17906,10 @@ class Dashboards {
             const config = {
                 url: `/rest/api/2/dashboard/${parameters.dashboardId}/items/${parameters.itemId}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                data: parameters.body,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -17926,8 +17925,9 @@ class Dashboards {
     }
     getDashboard(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/dashboard/${parameters.id}`,
+                url: `/rest/api/2/dashboard/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -17950,8 +17950,9 @@ class Dashboards {
     }
     deleteDashboard(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/dashboard/${parameters.id}`,
+                url: `/rest/api/2/dashboard/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -17985,7 +17986,7 @@ exports.Dashboards = Dashboards;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DynamicModules = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class DynamicModules {
     constructor(client) {
         this.client = client;
@@ -18036,7 +18037,7 @@ exports.DynamicModules = DynamicModules;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.FilterSharing = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class FilterSharing {
     constructor(client) {
         this.client = client;
@@ -18052,11 +18053,12 @@ class FilterSharing {
     }
     setDefaultShareScope(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const scope = typeof parameters === 'string' ? parameters : parameters.scope;
             const config = {
                 url: '/rest/api/2/filter/defaultShareScope',
                 method: 'PUT',
                 data: {
-                    scope: parameters === null || parameters === void 0 ? void 0 : parameters.scope,
+                    scope,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18064,8 +18066,9 @@ class FilterSharing {
     }
     getSharePermissions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/filter/${parameters.id}/permission`,
+                url: `/rest/api/2/filter/${id}/permission`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -18120,7 +18123,7 @@ exports.FilterSharing = FilterSharing;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Filters = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Filters {
     constructor(client) {
         this.client = client;
@@ -18216,12 +18219,13 @@ class Filters {
     }
     getFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/filter/${parameters.id}`,
+                url: `/rest/api/2/filter/${id}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
-                    overrideSharePermissions: parameters.overrideSharePermissions,
+                    expand: typeof parameters !== 'string' && parameters.expand,
+                    overrideSharePermissions: typeof parameters !== 'string' && parameters.overrideSharePermissions,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18249,8 +18253,9 @@ class Filters {
     }
     deleteFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/filter/${parameters.id}`,
+                url: `/rest/api/2/filter/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -18258,8 +18263,9 @@ class Filters {
     }
     getColumns(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/filter/${parameters.id}/columns`,
+                url: `/rest/api/2/filter/${id}/columns`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -18270,6 +18276,7 @@ class Filters {
             const config = {
                 url: `/rest/api/2/filter/${parameters.id}/columns`,
                 method: 'PUT',
+                data: parameters.columns,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -18285,11 +18292,12 @@ class Filters {
     }
     setFavouriteForFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/filter/${parameters.id}/favourite`,
+                url: `/rest/api/2/filter/${id}/favourite`,
                 method: 'PUT',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18297,11 +18305,12 @@ class Filters {
     }
     deleteFavouriteForFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/filter/${parameters.id}/favourite`,
+                url: `/rest/api/2/filter/${id}/favourite`,
                 method: 'DELETE',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18332,7 +18341,7 @@ exports.Filters = Filters;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.GroupAndUserPicker = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class GroupAndUserPicker {
     constructor(client) {
         this.client = client;
@@ -18370,7 +18379,7 @@ exports.GroupAndUserPicker = GroupAndUserPicker;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Groups = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Groups {
     constructor(client) {
         this.client = client;
@@ -18424,6 +18433,8 @@ class Groups {
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
                     groupId: parameters === null || parameters === void 0 ? void 0 : parameters.groupId,
                     groupName: parameters === null || parameters === void 0 ? void 0 : parameters.groupName,
+                    accessType: parameters === null || parameters === void 0 ? void 0 : parameters.accessType,
+                    applicationKey: parameters === null || parameters === void 0 ? void 0 : parameters.applicationKey,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18488,6 +18499,7 @@ class Groups {
                     exclude: parameters === null || parameters === void 0 ? void 0 : parameters.exclude,
                     excludeId: parameters === null || parameters === void 0 ? void 0 : parameters.excludeId,
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    caseInsensitive: parameters === null || parameters === void 0 ? void 0 : parameters.caseInsensitive,
                     userName: parameters === null || parameters === void 0 ? void 0 : parameters.userName,
                 },
             };
@@ -18507,17 +18519,17 @@ exports.Groups = Groups;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Version2Parameters = exports.Version2Models = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(40589), exports);
+tslib_1.__exportStar(__nccwpck_require__(59379), exports);
 tslib_1.__exportStar(__nccwpck_require__(51774), exports);
 tslib_1.__exportStar(__nccwpck_require__(73034), exports);
-tslib_1.__exportStar(__nccwpck_require__(59379), exports);
 tslib_1.__exportStar(__nccwpck_require__(94065), exports);
 tslib_1.__exportStar(__nccwpck_require__(53060), exports);
 tslib_1.__exportStar(__nccwpck_require__(99586), exports);
 tslib_1.__exportStar(__nccwpck_require__(15304), exports);
-tslib_1.__exportStar(__nccwpck_require__(19455), exports);
 tslib_1.__exportStar(__nccwpck_require__(40894), exports);
+tslib_1.__exportStar(__nccwpck_require__(19455), exports);
 tslib_1.__exportStar(__nccwpck_require__(37741), exports);
 tslib_1.__exportStar(__nccwpck_require__(95934), exports);
 tslib_1.__exportStar(__nccwpck_require__(77584), exports);
@@ -18532,33 +18544,34 @@ tslib_1.__exportStar(__nccwpck_require__(19890), exports);
 tslib_1.__exportStar(__nccwpck_require__(30463), exports);
 tslib_1.__exportStar(__nccwpck_require__(64175), exports);
 tslib_1.__exportStar(__nccwpck_require__(64761), exports);
-tslib_1.__exportStar(__nccwpck_require__(62844), exports);
 tslib_1.__exportStar(__nccwpck_require__(94300), exports);
+tslib_1.__exportStar(__nccwpck_require__(62844), exports);
 tslib_1.__exportStar(__nccwpck_require__(42866), exports);
 tslib_1.__exportStar(__nccwpck_require__(53465), exports);
 tslib_1.__exportStar(__nccwpck_require__(87583), exports);
 tslib_1.__exportStar(__nccwpck_require__(93254), exports);
 tslib_1.__exportStar(__nccwpck_require__(63617), exports);
 tslib_1.__exportStar(__nccwpck_require__(30789), exports);
+tslib_1.__exportStar(__nccwpck_require__(65337), exports);
 tslib_1.__exportStar(__nccwpck_require__(19863), exports);
 tslib_1.__exportStar(__nccwpck_require__(15472), exports);
 tslib_1.__exportStar(__nccwpck_require__(43225), exports);
 tslib_1.__exportStar(__nccwpck_require__(81136), exports);
+tslib_1.__exportStar(__nccwpck_require__(31842), exports);
 tslib_1.__exportStar(__nccwpck_require__(98294), exports);
 tslib_1.__exportStar(__nccwpck_require__(69738), exports);
-tslib_1.__exportStar(__nccwpck_require__(31842), exports);
 tslib_1.__exportStar(__nccwpck_require__(68003), exports);
 tslib_1.__exportStar(__nccwpck_require__(314), exports);
 tslib_1.__exportStar(__nccwpck_require__(95465), exports);
 tslib_1.__exportStar(__nccwpck_require__(38114), exports);
-tslib_1.__exportStar(__nccwpck_require__(65337), exports);
-tslib_1.__exportStar(__nccwpck_require__(16622), exports);
 tslib_1.__exportStar(__nccwpck_require__(44577), exports);
 tslib_1.__exportStar(__nccwpck_require__(84651), exports);
+tslib_1.__exportStar(__nccwpck_require__(16622), exports);
 tslib_1.__exportStar(__nccwpck_require__(96767), exports);
+tslib_1.__exportStar(__nccwpck_require__(77856), exports);
 tslib_1.__exportStar(__nccwpck_require__(66992), exports);
-tslib_1.__exportStar(__nccwpck_require__(56540), exports);
 tslib_1.__exportStar(__nccwpck_require__(54254), exports);
+tslib_1.__exportStar(__nccwpck_require__(56540), exports);
 tslib_1.__exportStar(__nccwpck_require__(22403), exports);
 tslib_1.__exportStar(__nccwpck_require__(57439), exports);
 tslib_1.__exportStar(__nccwpck_require__(84121), exports);
@@ -18569,22 +18582,23 @@ tslib_1.__exportStar(__nccwpck_require__(54753), exports);
 tslib_1.__exportStar(__nccwpck_require__(89843), exports);
 tslib_1.__exportStar(__nccwpck_require__(39798), exports);
 tslib_1.__exportStar(__nccwpck_require__(83669), exports);
+tslib_1.__exportStar(__nccwpck_require__(73652), exports);
 tslib_1.__exportStar(__nccwpck_require__(47704), exports);
 tslib_1.__exportStar(__nccwpck_require__(23898), exports);
-tslib_1.__exportStar(__nccwpck_require__(73652), exports);
+tslib_1.__exportStar(__nccwpck_require__(57638), exports);
 tslib_1.__exportStar(__nccwpck_require__(22311), exports);
 tslib_1.__exportStar(__nccwpck_require__(93122), exports);
 tslib_1.__exportStar(__nccwpck_require__(60932), exports);
-tslib_1.__exportStar(__nccwpck_require__(57638), exports);
 tslib_1.__exportStar(__nccwpck_require__(68655), exports);
 tslib_1.__exportStar(__nccwpck_require__(22776), exports);
 tslib_1.__exportStar(__nccwpck_require__(22701), exports);
 tslib_1.__exportStar(__nccwpck_require__(47579), exports);
 tslib_1.__exportStar(__nccwpck_require__(90113), exports);
 tslib_1.__exportStar(__nccwpck_require__(52189), exports);
-tslib_1.__exportStar(__nccwpck_require__(98583), exports);
 tslib_1.__exportStar(__nccwpck_require__(60854), exports);
+tslib_1.__exportStar(__nccwpck_require__(98583), exports);
 tslib_1.__exportStar(__nccwpck_require__(86060), exports);
+tslib_1.__exportStar(__nccwpck_require__(93584), exports);
 tslib_1.__exportStar(__nccwpck_require__(17858), exports);
 tslib_1.__exportStar(__nccwpck_require__(20424), exports);
 tslib_1.__exportStar(__nccwpck_require__(35307), exports);
@@ -18592,7 +18606,6 @@ tslib_1.__exportStar(__nccwpck_require__(50685), exports);
 tslib_1.__exportStar(__nccwpck_require__(8782), exports);
 tslib_1.__exportStar(__nccwpck_require__(78481), exports);
 tslib_1.__exportStar(__nccwpck_require__(98887), exports);
-tslib_1.__exportStar(__nccwpck_require__(93584), exports);
 exports.Version2Models = __nccwpck_require__(7713);
 exports.Version2Parameters = __nccwpck_require__(74874);
 tslib_1.__exportStar(__nccwpck_require__(69218), exports);
@@ -18607,7 +18620,7 @@ tslib_1.__exportStar(__nccwpck_require__(69218), exports);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.InstanceInformation = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class InstanceInformation {
     constructor(client) {
         this.client = client;
@@ -18634,7 +18647,7 @@ exports.InstanceInformation = InstanceInformation;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueAdjustmentsApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueAdjustmentsApps {
     constructor(client) {
         this.client = client;
@@ -18705,7 +18718,7 @@ exports.IssueAdjustmentsApps = IssueAdjustmentsApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueAttachments = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const FormData = __nccwpck_require__(64334);
 class IssueAttachments {
     constructor(client) {
@@ -18713,11 +18726,12 @@ class IssueAttachments {
     }
     getAttachmentContent(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/attachment/content/${parameters.id}`,
+                url: `/rest/api/2/attachment/content/${id}`,
                 method: 'GET',
                 params: {
-                    redirect: parameters.redirect,
+                    redirect: typeof parameters !== 'string' && parameters.redirect,
                 },
                 responseType: 'arraybuffer',
             };
@@ -18735,14 +18749,15 @@ class IssueAttachments {
     }
     getAttachmentThumbnail(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/attachment/thumbnail/${parameters.id}`,
+                url: `/rest/api/2/attachment/thumbnail/${id}`,
                 method: 'GET',
                 params: {
-                    redirect: parameters.redirect,
-                    fallbackToDefault: parameters.fallbackToDefault,
-                    width: parameters.width,
-                    height: parameters.height,
+                    redirect: typeof parameters !== 'string' && parameters.redirect,
+                    fallbackToDefault: typeof parameters !== 'string' && parameters.fallbackToDefault,
+                    width: typeof parameters !== 'string' && parameters.width,
+                    height: typeof parameters !== 'string' && parameters.height,
                 },
                 responseType: 'arraybuffer',
             };
@@ -18751,8 +18766,9 @@ class IssueAttachments {
     }
     getAttachment(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/attachment/${parameters.id}`,
+                url: `/rest/api/2/attachment/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -18760,8 +18776,9 @@ class IssueAttachments {
     }
     removeAttachment(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/attachment/${parameters.id}`,
+                url: `/rest/api/2/attachment/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -18769,8 +18786,9 @@ class IssueAttachments {
     }
     expandAttachmentForHumans(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/attachment/${parameters.id}/expand/human`,
+                url: `/rest/api/2/attachment/${id}/expand/human`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -18778,8 +18796,9 @@ class IssueAttachments {
     }
     expandAttachmentForMachines(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/attachment/${parameters.id}/expand/raw`,
+                url: `/rest/api/2/attachment/${id}/expand/raw`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -18815,15 +18834,16 @@ exports.IssueAttachments = IssueAttachments;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCommentProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCommentProperties {
     constructor(client) {
         this.client = client;
     }
     getCommentPropertyKeys(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const commentId = typeof parameters === 'string' ? parameters : parameters.commentId;
             const config = {
-                url: `/rest/api/2/comment/${parameters.commentId}/properties`,
+                url: `/rest/api/2/comment/${commentId}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -18843,6 +18863,7 @@ class IssueCommentProperties {
             const config = {
                 url: `/rest/api/2/comment/${parameters.commentId}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.property,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -18869,7 +18890,7 @@ exports.IssueCommentProperties = IssueCommentProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueComments = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueComments {
     constructor(client) {
         this.client = client;
@@ -18880,10 +18901,10 @@ class IssueComments {
                 url: '/rest/api/2/comment/list',
                 method: 'POST',
                 params: {
-                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
+                    expand: parameters.expand,
                 },
                 data: {
-                    ids: parameters === null || parameters === void 0 ? void 0 : parameters.ids,
+                    ids: parameters.ids,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18891,14 +18912,15 @@ class IssueComments {
     }
     getComments(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/comment`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/comment`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    orderBy: parameters.orderBy,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    orderBy: typeof parameters !== 'string' && parameters.orderBy,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -18983,7 +19005,7 @@ exports.IssueComments = IssueComments;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldConfigurationApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldConfigurationApps {
     constructor(client) {
         this.client = client;
@@ -19032,22 +19054,23 @@ exports.IssueCustomFieldConfigurationApps = IssueCustomFieldConfigurationApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldContexts = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldContexts {
     constructor(client) {
         this.client = client;
     }
     getContextsForField(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldId}/context`,
+                url: `/rest/api/2/field/${fieldId}/context`,
                 method: 'GET',
                 params: {
-                    isAnyIssueType: parameters.isAnyIssueType,
-                    isGlobalContext: parameters.isGlobalContext,
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    isAnyIssueType: typeof parameters !== 'string' && parameters.isAnyIssueType,
+                    isGlobalContext: typeof parameters !== 'string' && parameters.isGlobalContext,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19071,13 +19094,14 @@ class IssueCustomFieldContexts {
     }
     getDefaultValues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldId}/context/defaultValue`,
+                url: `/rest/api/2/field/${fieldId}/context/defaultValue`,
                 method: 'GET',
                 params: {
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19097,13 +19121,14 @@ class IssueCustomFieldContexts {
     }
     getIssueTypeMappingsForContexts(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldId}/context/issuetypemapping`,
+                url: `/rest/api/2/field/${fieldId}/context/issuetypemapping`,
                 method: 'GET',
                 params: {
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19127,13 +19152,14 @@ class IssueCustomFieldContexts {
     }
     getProjectContextMapping(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldId}/context/projectmapping`,
+                url: `/rest/api/2/field/${fieldId}/context/projectmapping`,
                 method: 'GET',
                 params: {
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19222,7 +19248,7 @@ exports.IssueCustomFieldContexts = IssueCustomFieldContexts;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldOptions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldOptions {
     constructor(client) {
         this.client = client;
@@ -19266,8 +19292,9 @@ class IssueCustomFieldOptions {
     }
     getCustomFieldOption(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/customFieldOption/${parameters.id}`,
+                url: `/rest/api/2/customFieldOption/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -19348,19 +19375,20 @@ exports.IssueCustomFieldOptions = IssueCustomFieldOptions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldOptionsApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldOptionsApps {
     constructor(client) {
         this.client = client;
     }
     getAllIssueFieldOptions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldKey = typeof parameters === 'string' ? parameters : parameters.fieldKey;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldKey}/option`,
+                url: `/rest/api/2/field/${fieldKey}/option`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19382,13 +19410,14 @@ class IssueCustomFieldOptionsApps {
     }
     getSelectableIssueFieldOptions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldKey = typeof parameters === 'string' ? parameters : parameters.fieldKey;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldKey}/option/suggestions/edit`,
+                url: `/rest/api/2/field/${fieldKey}/option/suggestions/edit`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    projectId: parameters.projectId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    projectId: typeof parameters !== 'string' && parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19396,13 +19425,14 @@ class IssueCustomFieldOptionsApps {
     }
     getVisibleIssueFieldOptions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldKey = typeof parameters === 'string' ? parameters : parameters.fieldKey;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldKey}/option/suggestions/search`,
+                url: `/rest/api/2/field/${fieldKey}/option/suggestions/search`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    projectId: parameters.projectId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    projectId: typeof parameters !== 'string' && parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19469,7 +19499,7 @@ exports.IssueCustomFieldOptionsApps = IssueCustomFieldOptionsApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldValuesApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldValuesApps {
     constructor(client) {
         this.client = client;
@@ -19480,10 +19510,10 @@ class IssueCustomFieldValuesApps {
                 url: '/rest/api/2/app/field/value',
                 method: 'POST',
                 params: {
-                    generateChangelog: parameters === null || parameters === void 0 ? void 0 : parameters.generateChangelog,
+                    generateChangelog: parameters.generateChangelog,
                 },
                 data: {
-                    updates: parameters === null || parameters === void 0 ? void 0 : parameters.updates,
+                    updates: parameters.updates,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19517,7 +19547,7 @@ exports.IssueCustomFieldValuesApps = IssueCustomFieldValuesApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueFieldConfigurations = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueFieldConfigurations {
     constructor(client) {
         this.client = client;
@@ -19566,8 +19596,9 @@ class IssueFieldConfigurations {
     }
     deleteFieldConfiguration(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/fieldconfiguration/${parameters.id}`,
+                url: `/rest/api/2/fieldconfiguration/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -19575,12 +19606,13 @@ class IssueFieldConfigurations {
     }
     getFieldConfigurationItems(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/fieldconfiguration/${parameters.id}/fields`,
+                url: `/rest/api/2/fieldconfiguration/${id}/fields`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19659,8 +19691,8 @@ class IssueFieldConfigurations {
                 url: '/rest/api/2/fieldconfigurationscheme/project',
                 method: 'PUT',
                 data: {
-                    fieldConfigurationSchemeId: parameters === null || parameters === void 0 ? void 0 : parameters.fieldConfigurationSchemeId,
-                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
+                    fieldConfigurationSchemeId: parameters.fieldConfigurationSchemeId,
+                    projectId: parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19681,8 +19713,9 @@ class IssueFieldConfigurations {
     }
     deleteFieldConfigurationScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/fieldconfigurationscheme/${parameters.id}`,
+                url: `/rest/api/2/fieldconfigurationscheme/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -19725,7 +19758,7 @@ exports.IssueFieldConfigurations = IssueFieldConfigurations;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueFields = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueFields {
     constructor(client) {
         this.client = client;
@@ -19782,6 +19815,7 @@ class IssueFields {
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
                     id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
                     query: parameters === null || parameters === void 0 ? void 0 : parameters.query,
+                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
                     orderBy: parameters === null || parameters === void 0 ? void 0 : parameters.orderBy,
                 },
             };
@@ -19855,7 +19889,7 @@ exports.IssueFields = IssueFields;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueLinkTypes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueLinkTypes {
     constructor(client) {
         this.client = client;
@@ -19887,8 +19921,9 @@ class IssueLinkTypes {
     }
     getIssueLinkType(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueLinkTypeId = typeof parameters === 'string' ? parameters : parameters.issueLinkTypeId;
             const config = {
-                url: `/rest/api/2/issueLinkType/${parameters.issueLinkTypeId}`,
+                url: `/rest/api/2/issueLinkType/${issueLinkTypeId}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -19912,8 +19947,9 @@ class IssueLinkTypes {
     }
     deleteIssueLinkType(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueLinkTypeId = typeof parameters === 'string' ? parameters : parameters.issueLinkTypeId;
             const config = {
-                url: `/rest/api/2/issueLinkType/${parameters.issueLinkTypeId}`,
+                url: `/rest/api/2/issueLinkType/${issueLinkTypeId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -19932,7 +19968,7 @@ exports.IssueLinkTypes = IssueLinkTypes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueLinks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueLinks {
     constructor(client) {
         this.client = client;
@@ -19943,10 +19979,10 @@ class IssueLinks {
                 url: '/rest/api/2/issueLink',
                 method: 'POST',
                 data: {
-                    type: parameters === null || parameters === void 0 ? void 0 : parameters.type,
-                    inwardIssue: parameters === null || parameters === void 0 ? void 0 : parameters.inwardIssue,
-                    outwardIssue: parameters === null || parameters === void 0 ? void 0 : parameters.outwardIssue,
-                    comment: parameters === null || parameters === void 0 ? void 0 : parameters.comment,
+                    type: parameters.type,
+                    inwardIssue: parameters.inwardIssue,
+                    outwardIssue: parameters.outwardIssue,
+                    comment: parameters.comment,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -19954,8 +19990,9 @@ class IssueLinks {
     }
     getIssueLink(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const linkId = typeof parameters === 'string' ? parameters : parameters.linkId;
             const config = {
-                url: `/rest/api/2/issueLink/${parameters.linkId}`,
+                url: `/rest/api/2/issueLink/${linkId}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -19963,8 +20000,9 @@ class IssueLinks {
     }
     deleteIssueLink(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const linkId = typeof parameters === 'string' ? parameters : parameters.linkId;
             const config = {
-                url: `/rest/api/2/issueLink/${parameters.linkId}`,
+                url: `/rest/api/2/issueLink/${linkId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -19983,7 +20021,7 @@ exports.IssueLinks = IssueLinks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueNavigatorSettings = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueNavigatorSettings {
     constructor(client) {
         this.client = client;
@@ -20019,7 +20057,7 @@ exports.IssueNavigatorSettings = IssueNavigatorSettings;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueNotificationSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueNotificationSchemes {
     constructor(client) {
         this.client = client;
@@ -20032,7 +20070,39 @@ class IssueNotificationSchemes {
                 params: {
                     startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
+                    onlyDefault: parameters === null || parameters === void 0 ? void 0 : parameters.onlyDefault,
                     expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    createNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/notificationscheme',
+                method: 'POST',
+                data: {
+                    description: parameters.description,
+                    name: parameters.name,
+                    notificationSchemeEvents: parameters.notificationSchemeEvents,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getNotificationSchemeToProjectMappings(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/notificationscheme/project',
+                method: 'GET',
+                params: {
+                    startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
+                    maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    notificationSchemeId: parameters === null || parameters === void 0 ? void 0 : parameters.notificationSchemeId,
+                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -20040,12 +20110,56 @@ class IssueNotificationSchemes {
     }
     getNotificationScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/notificationscheme/${parameters.id}`,
+                url: `/rest/api/2/notificationscheme/${id}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    updateNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/notificationscheme/${parameters.id}`,
+                method: 'PUT',
+                data: {
+                    description: parameters.description,
+                    name: parameters.name,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    addNotifications(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/notificationscheme/${parameters.id}/notification`,
+                method: 'PUT',
+                data: {
+                    notificationSchemeEvents: parameters.notificationSchemeEvents,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/notificationscheme/${parameters.notificationSchemeId}`,
+                method: 'DELETE',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    removeNotificationFromNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/notificationscheme/${parameters.notificationSchemeId}/notification/${parameters.notificationId}`,
+                method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
         });
@@ -20063,7 +20177,7 @@ exports.IssueNotificationSchemes = IssueNotificationSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssuePriorities = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssuePriorities {
     constructor(client) {
         this.client = client;
@@ -20104,6 +20218,20 @@ class IssuePriorities {
             return this.client.sendRequest(config, callback);
         });
     }
+    movePriorities(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/priority/move',
+                method: 'PUT',
+                data: {
+                    ids: parameters.ids,
+                    after: parameters.after,
+                    position: parameters.position,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
     searchPriorities(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
             const config = {
@@ -20121,8 +20249,9 @@ class IssuePriorities {
     }
     getPriority(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/priority/${parameters.id}`,
+                url: `/rest/api/2/priority/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -20143,6 +20272,19 @@ class IssuePriorities {
             return this.client.sendRequest(config, callback);
         });
     }
+    deletePriority(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/priority/${parameters.id}`,
+                method: 'DELETE',
+                params: {
+                    newPriority: parameters.newPriority,
+                    replaceWith: parameters.replaceWith,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
 }
 exports.IssuePriorities = IssuePriorities;
 //# sourceMappingURL=issuePriorities.js.map
@@ -20156,7 +20298,7 @@ exports.IssuePriorities = IssuePriorities;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueProperties {
     constructor(client) {
         this.client = client;
@@ -20215,8 +20357,9 @@ class IssueProperties {
     }
     getIssuePropertyKeys(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/properties`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -20262,18 +20405,19 @@ exports.IssueProperties = IssueProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueRemoteLinks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueRemoteLinks {
     constructor(client) {
         this.client = client;
     }
     getRemoteIssueLinks(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/remotelink`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/remotelink`,
                 method: 'GET',
                 params: {
-                    globalId: parameters.globalId,
+                    globalId: typeof parameters !== 'string' && parameters.globalId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -20296,11 +20440,12 @@ class IssueRemoteLinks {
     }
     deleteRemoteIssueLinkByGlobalId(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/remotelink`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/remotelink`,
                 method: 'DELETE',
                 params: {
-                    globalId: parameters.globalId,
+                    globalId: typeof parameters !== 'string' && parameters.globalId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -20352,7 +20497,7 @@ exports.IssueRemoteLinks = IssueRemoteLinks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueResolutions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueResolutions {
     constructor(client) {
         this.client = client;
@@ -20366,11 +20511,85 @@ class IssueResolutions {
             return this.client.sendRequest(config, callback);
         });
     }
+    createResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/resolution',
+                method: 'POST',
+                data: parameters,
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    setDefaultResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/resolution/default',
+                method: 'PUT',
+                data: {
+                    id: parameters.id,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    moveResolutions(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/resolution/move',
+                method: 'PUT',
+                data: {
+                    ids: parameters.ids,
+                    after: parameters.after,
+                    position: parameters.position,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    searchResolutions(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/resolution/search',
+                method: 'GET',
+                params: {
+                    startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
+                    maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    onlyDefault: parameters === null || parameters === void 0 ? void 0 : parameters.onlyDefault,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
     getResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
+            const config = {
+                url: `/rest/api/2/resolution/${id}`,
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    updateResolution(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
             const config = {
                 url: `/rest/api/2/resolution/${parameters.id}`,
-                method: 'GET',
+                method: 'PUT',
+                data: Object.assign(Object.assign({}, parameters), { name: parameters.name, description: parameters.description, id: undefined }),
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/resolution/${parameters.id}`,
+                method: 'DELETE',
+                params: {
+                    replaceWith: parameters.replaceWith,
+                },
             };
             return this.client.sendRequest(config, callback);
         });
@@ -20388,7 +20607,7 @@ exports.IssueResolutions = IssueResolutions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueSearch = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueSearch {
     constructor(client) {
         this.client = client;
@@ -20474,21 +20693,22 @@ exports.IssueSearch = IssueSearch;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueSecurityLevel = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueSecurityLevel {
     constructor(client) {
         this.client = client;
     }
     getIssueSecurityLevelMembers(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueSecuritySchemeId = typeof parameters === 'string' ? parameters : parameters.issueSecuritySchemeId;
             const config = {
-                url: `/rest/api/2/issuesecurityschemes/${parameters.issueSecuritySchemeId}/members`,
+                url: `/rest/api/2/issuesecurityschemes/${issueSecuritySchemeId}/members`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    issueSecurityLevelId: parameters.issueSecurityLevelId,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    issueSecurityLevelId: typeof parameters !== 'string' && parameters.issueSecurityLevelId,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -20496,8 +20716,9 @@ class IssueSecurityLevel {
     }
     getIssueSecurityLevel(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/securitylevel/${parameters.id}`,
+                url: `/rest/api/2/securitylevel/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -20516,7 +20737,7 @@ exports.IssueSecurityLevel = IssueSecurityLevel;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueSecuritySchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueSecuritySchemes {
     constructor(client) {
         this.client = client;
@@ -20532,8 +20753,9 @@ class IssueSecuritySchemes {
     }
     getIssueSecurityScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/issuesecurityschemes/${parameters.id}`,
+                url: `/rest/api/2/issuesecurityschemes/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -20552,15 +20774,16 @@ exports.IssueSecuritySchemes = IssueSecuritySchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypeProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypeProperties {
     constructor(client) {
         this.client = client;
     }
     getIssueTypePropertyKeys(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueTypeId = typeof parameters === 'string' ? parameters : parameters.issueTypeId;
             const config = {
-                url: `/rest/api/2/issuetype/${parameters.issueTypeId}/properties`,
+                url: `/rest/api/2/issuetype/${issueTypeId}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -20580,6 +20803,7 @@ class IssueTypeProperties {
             const config = {
                 url: `/rest/api/2/issuetype/${parameters.issueTypeId}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.body,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -20606,7 +20830,7 @@ exports.IssueTypeProperties = IssueTypeProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypeSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypeSchemes {
     constructor(client) {
         this.client = client;
@@ -20700,8 +20924,9 @@ class IssueTypeSchemes {
     }
     deleteIssueTypeScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueTypeSchemeId = typeof parameters === 'string' ? parameters : parameters.issueTypeSchemeId;
             const config = {
-                url: `/rest/api/2/issuetypescheme/${parameters.issueTypeSchemeId}`,
+                url: `/rest/api/2/issuetypescheme/${issueTypeSchemeId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -20755,7 +20980,7 @@ exports.IssueTypeSchemes = IssueTypeSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypeScreenSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypeScreenSchemes {
     constructor(client) {
         this.client = client;
@@ -20847,8 +21072,9 @@ class IssueTypeScreenSchemes {
     }
     deleteIssueTypeScreenScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueTypeScreenSchemeId = typeof parameters === 'string' ? parameters : parameters.issueTypeScreenSchemeId;
             const config = {
-                url: `/rest/api/2/issuetypescreenscheme/${parameters.issueTypeScreenSchemeId}`,
+                url: `/rest/api/2/issuetypescreenscheme/${issueTypeScreenSchemeId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -20892,13 +21118,14 @@ class IssueTypeScreenSchemes {
     }
     getProjectsForIssueTypeScreenScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueTypeScreenSchemeId = typeof parameters === 'string' ? parameters : parameters.issueTypeScreenSchemeId;
             const config = {
-                url: `/rest/api/2/issuetypescreenscheme/${parameters.issueTypeScreenSchemeId}/project`,
+                url: `/rest/api/2/issuetypescreenscheme/${issueTypeScreenSchemeId}/project`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    query: parameters.query,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    query: typeof parameters !== 'string' && parameters.query,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -20917,7 +21144,7 @@ exports.IssueTypeScreenSchemes = IssueTypeScreenSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypes {
     constructor(client) {
         this.client = client;
@@ -20961,8 +21188,9 @@ class IssueTypes {
     }
     getIssueType(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/issuetype/${parameters.id}`,
+                url: `/rest/api/2/issuetype/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -20984,11 +21212,12 @@ class IssueTypes {
     }
     deleteIssueType(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/issuetype/${parameters.id}`,
+                url: `/rest/api/2/issuetype/${id}`,
                 method: 'DELETE',
                 params: {
-                    alternativeIssueTypeId: parameters.alternativeIssueTypeId,
+                    alternativeIssueTypeId: typeof parameters !== 'string' && parameters.alternativeIssueTypeId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -20996,8 +21225,9 @@ class IssueTypes {
     }
     getAlternativeIssueTypes(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/issuetype/${parameters.id}/alternatives`,
+                url: `/rest/api/2/issuetype/${id}/alternatives`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -21030,15 +21260,16 @@ exports.IssueTypes = IssueTypes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueVotes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueVotes {
     constructor(client) {
         this.client = client;
     }
     getVotes(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/votes`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/votes`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -21046,8 +21277,9 @@ class IssueVotes {
     }
     addVote(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/votes`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/votes`,
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -21058,8 +21290,9 @@ class IssueVotes {
     }
     removeVote(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/votes`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/votes`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -21078,7 +21311,7 @@ exports.IssueVotes = IssueVotes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueWatchers = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueWatchers {
     constructor(client) {
         this.client = client;
@@ -21097,8 +21330,9 @@ class IssueWatchers {
     }
     getIssueWatchers(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/watchers`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/watchers`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -21143,7 +21377,7 @@ exports.IssueWatchers = IssueWatchers;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueWorklogProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueWorklogProperties {
     constructor(client) {
         this.client = client;
@@ -21197,22 +21431,23 @@ exports.IssueWorklogProperties = IssueWorklogProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueWorklogs = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueWorklogs {
     constructor(client) {
         this.client = client;
     }
     getIssueWorklog(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/worklog`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/worklog`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    startedAfter: parameters.startedAfter,
-                    startedBefore: parameters.startedBefore,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    startedAfter: typeof parameters !== 'string' && parameters.startedAfter,
+                    startedBefore: typeof parameters !== 'string' && parameters.startedBefore,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21355,7 +21590,7 @@ exports.IssueWorklogs = IssueWorklogs;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Issues = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Issues {
     constructor(client) {
         this.client = client;
@@ -21375,14 +21610,14 @@ class Issues {
                 url: '/rest/api/2/issue',
                 method: 'POST',
                 params: {
-                    updateHistory: parameters === null || parameters === void 0 ? void 0 : parameters.updateHistory,
+                    updateHistory: parameters.updateHistory,
                 },
                 data: {
-                    transition: parameters === null || parameters === void 0 ? void 0 : parameters.transition,
-                    fields: parameters === null || parameters === void 0 ? void 0 : parameters.fields,
-                    update: parameters === null || parameters === void 0 ? void 0 : parameters.update,
-                    historyMetadata: parameters === null || parameters === void 0 ? void 0 : parameters.historyMetadata,
-                    properties: parameters === null || parameters === void 0 ? void 0 : parameters.properties,
+                    transition: parameters.transition,
+                    fields: parameters.fields,
+                    update: parameters.update,
+                    historyMetadata: parameters.historyMetadata,
+                    properties: parameters.properties,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21418,15 +21653,16 @@ class Issues {
     }
     getIssue(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}`,
+                url: `/rest/api/2/issue/${issueIdOrKey}`,
                 method: 'GET',
                 params: {
-                    fields: parameters.fields,
-                    fieldsByKeys: parameters.fieldsByKeys,
-                    expand: parameters.expand,
-                    properties: parameters.properties,
-                    updateHistory: parameters.updateHistory,
+                    fields: typeof parameters !== 'string' && parameters.fields,
+                    fieldsByKeys: typeof parameters !== 'string' && parameters.fieldsByKeys,
+                    expand: typeof parameters !== 'string' && parameters.expand,
+                    properties: typeof parameters !== 'string' && parameters.properties,
+                    updateHistory: typeof parameters !== 'string' && parameters.updateHistory,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21455,11 +21691,12 @@ class Issues {
     }
     deleteIssue(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}`,
+                url: `/rest/api/2/issue/${issueIdOrKey}`,
                 method: 'DELETE',
                 params: {
-                    deleteSubtasks: parameters.deleteSubtasks,
+                    deleteSubtasks: typeof parameters !== 'string' && parameters.deleteSubtasks,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21492,12 +21729,13 @@ class Issues {
     }
     getChangeLogs(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/changelog`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/changelog`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21517,12 +21755,13 @@ class Issues {
     }
     getEditIssueMeta(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/editmeta`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/editmeta`,
                 method: 'GET',
                 params: {
-                    overrideScreenSecurity: parameters.overrideScreenSecurity,
-                    overrideEditableFlag: parameters.overrideEditableFlag,
+                    overrideScreenSecurity: typeof parameters !== 'string' && parameters.overrideScreenSecurity,
+                    overrideEditableFlag: typeof parameters !== 'string' && parameters.overrideEditableFlag,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21546,15 +21785,16 @@ class Issues {
     }
     getTransitions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/2/issue/${parameters.issueIdOrKey}/transitions`,
+                url: `/rest/api/2/issue/${issueIdOrKey}/transitions`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
-                    transitionId: parameters.transitionId,
-                    skipRemoteOnlyCondition: parameters.skipRemoteOnlyCondition,
-                    includeUnavailableTransitions: parameters.includeUnavailableTransitions,
-                    sortByOpsBarAndStatus: parameters.sortByOpsBarAndStatus,
+                    expand: typeof parameters !== 'string' && parameters.expand,
+                    transitionId: typeof parameters !== 'string' && parameters.transitionId,
+                    skipRemoteOnlyCondition: typeof parameters !== 'string' && parameters.skipRemoteOnlyCondition,
+                    includeUnavailableTransitions: typeof parameters !== 'string' && parameters.includeUnavailableTransitions,
+                    sortByOpsBarAndStatus: typeof parameters !== 'string' && parameters.sortByOpsBarAndStatus,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21589,7 +21829,7 @@ exports.Issues = Issues;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JQL = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class JQL {
     constructor(client) {
         this.client = client;
@@ -21609,8 +21849,8 @@ class JQL {
                 url: '/rest/api/2/jql/autocompletedata',
                 method: 'POST',
                 data: {
-                    projectIds: parameters === null || parameters === void 0 ? void 0 : parameters.projectIds,
                     includeCollapsedFields: parameters === null || parameters === void 0 ? void 0 : parameters.includeCollapsedFields,
+                    projectIds: parameters === null || parameters === void 0 ? void 0 : parameters.projectIds,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -21670,6 +21910,34 @@ class JQL {
             return this.client.sendRequest(config, callback);
         });
     }
+    getPrecomputations(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/jql/function/computation',
+                method: 'GET',
+                params: {
+                    functionKey: parameters === null || parameters === void 0 ? void 0 : parameters.functionKey,
+                    startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
+                    maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    orderBy: parameters === null || parameters === void 0 ? void 0 : parameters.orderBy,
+                    filter: parameters === null || parameters === void 0 ? void 0 : parameters.filter,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    updatePrecomputations(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/jql/function/computation',
+                method: 'POST',
+                data: {
+                    values: parameters.values,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
 }
 exports.JQL = JQL;
 //# sourceMappingURL=jQL.js.map
@@ -21683,7 +21951,7 @@ exports.JQL = JQL;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JiraExpressions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class JiraExpressions {
     constructor(client) {
         this.client = client;
@@ -21733,7 +22001,7 @@ exports.JiraExpressions = JiraExpressions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JiraSettings = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class JiraSettings {
     constructor(client) {
         this.client = client;
@@ -21793,7 +22061,7 @@ exports.JiraSettings = JiraSettings;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Labels = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Labels {
     constructor(client) {
         this.client = client;
@@ -21814,6 +22082,42 @@ class Labels {
 }
 exports.Labels = Labels;
 //# sourceMappingURL=labels.js.map
+
+/***/ }),
+
+/***/ 77856:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.LicenseMetrics = void 0;
+const tslib_1 = __nccwpck_require__(4351);
+class LicenseMetrics {
+    constructor(client) {
+        this.client = client;
+    }
+    getApproximateLicenseCount(callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/2/license/approximateLicenseCount',
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getApproximateApplicationLicenseCount(applicationKey, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/2/license/approximateLicenseCount/product/${applicationKey}`,
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+}
+exports.LicenseMetrics = LicenseMetrics;
+//# sourceMappingURL=licenseMetrics.js.map
 
 /***/ }),
 
@@ -21854,6 +22158,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=addGroup.js.map
+
+/***/ }),
+
+/***/ 58284:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=addNotificationsDetails.js.map
 
 /***/ }),
 
@@ -22367,6 +22681,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 18222:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=containerForProjectFeatures.js.map
+
+/***/ }),
+
 /***/ 11363:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -22457,6 +22781,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 76423:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createNotificationSchemeDetails.js.map
+
+/***/ }),
+
 /***/ 27496:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -22474,6 +22808,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=createProjectDetails.js.map
+
+/***/ }),
+
+/***/ 9742:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createResolutionDetails.js.map
 
 /***/ }),
 
@@ -23433,11 +23777,12 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(54357), exports);
 tslib_1.__exportStar(__nccwpck_require__(93353), exports);
 tslib_1.__exportStar(__nccwpck_require__(23205), exports);
 tslib_1.__exportStar(__nccwpck_require__(59194), exports);
+tslib_1.__exportStar(__nccwpck_require__(58284), exports);
 tslib_1.__exportStar(__nccwpck_require__(21686), exports);
 tslib_1.__exportStar(__nccwpck_require__(89391), exports);
 tslib_1.__exportStar(__nccwpck_require__(14972), exports);
@@ -23489,6 +23834,7 @@ tslib_1.__exportStar(__nccwpck_require__(49410), exports);
 tslib_1.__exportStar(__nccwpck_require__(32264), exports);
 tslib_1.__exportStar(__nccwpck_require__(66433), exports);
 tslib_1.__exportStar(__nccwpck_require__(67177), exports);
+tslib_1.__exportStar(__nccwpck_require__(18222), exports);
 tslib_1.__exportStar(__nccwpck_require__(11363), exports);
 tslib_1.__exportStar(__nccwpck_require__(60790), exports);
 tslib_1.__exportStar(__nccwpck_require__(23634), exports);
@@ -23500,8 +23846,10 @@ tslib_1.__exportStar(__nccwpck_require__(32672), exports);
 tslib_1.__exportStar(__nccwpck_require__(97169), exports);
 tslib_1.__exportStar(__nccwpck_require__(50708), exports);
 tslib_1.__exportStar(__nccwpck_require__(20923), exports);
+tslib_1.__exportStar(__nccwpck_require__(76423), exports);
 tslib_1.__exportStar(__nccwpck_require__(27496), exports);
 tslib_1.__exportStar(__nccwpck_require__(60996), exports);
+tslib_1.__exportStar(__nccwpck_require__(9742), exports);
 tslib_1.__exportStar(__nccwpck_require__(39960), exports);
 tslib_1.__exportStar(__nccwpck_require__(69926), exports);
 tslib_1.__exportStar(__nccwpck_require__(60027), exports);
@@ -23668,6 +24016,7 @@ tslib_1.__exportStar(__nccwpck_require__(46595), exports);
 tslib_1.__exportStar(__nccwpck_require__(31529), exports);
 tslib_1.__exportStar(__nccwpck_require__(6679), exports);
 tslib_1.__exportStar(__nccwpck_require__(85927), exports);
+tslib_1.__exportStar(__nccwpck_require__(2702), exports);
 tslib_1.__exportStar(__nccwpck_require__(57438), exports);
 tslib_1.__exportStar(__nccwpck_require__(15458), exports);
 tslib_1.__exportStar(__nccwpck_require__(55982), exports);
@@ -23688,6 +24037,7 @@ tslib_1.__exportStar(__nccwpck_require__(20316), exports);
 tslib_1.__exportStar(__nccwpck_require__(32977), exports);
 tslib_1.__exportStar(__nccwpck_require__(7320), exports);
 tslib_1.__exportStar(__nccwpck_require__(94929), exports);
+tslib_1.__exportStar(__nccwpck_require__(94725), exports);
 tslib_1.__exportStar(__nccwpck_require__(25164), exports);
 tslib_1.__exportStar(__nccwpck_require__(99113), exports);
 tslib_1.__exportStar(__nccwpck_require__(67032), exports);
@@ -23706,7 +24056,9 @@ tslib_1.__exportStar(__nccwpck_require__(8878), exports);
 tslib_1.__exportStar(__nccwpck_require__(6063), exports);
 tslib_1.__exportStar(__nccwpck_require__(14207), exports);
 tslib_1.__exportStar(__nccwpck_require__(78682), exports);
+tslib_1.__exportStar(__nccwpck_require__(11094), exports);
 tslib_1.__exportStar(__nccwpck_require__(2307), exports);
+tslib_1.__exportStar(__nccwpck_require__(38449), exports);
 tslib_1.__exportStar(__nccwpck_require__(64233), exports);
 tslib_1.__exportStar(__nccwpck_require__(14442), exports);
 tslib_1.__exportStar(__nccwpck_require__(97259), exports);
@@ -23742,6 +24094,7 @@ tslib_1.__exportStar(__nccwpck_require__(14711), exports);
 tslib_1.__exportStar(__nccwpck_require__(79599), exports);
 tslib_1.__exportStar(__nccwpck_require__(17208), exports);
 tslib_1.__exportStar(__nccwpck_require__(82814), exports);
+tslib_1.__exportStar(__nccwpck_require__(31028), exports);
 tslib_1.__exportStar(__nccwpck_require__(46605), exports);
 tslib_1.__exportStar(__nccwpck_require__(58961), exports);
 tslib_1.__exportStar(__nccwpck_require__(13469), exports);
@@ -23751,6 +24104,7 @@ tslib_1.__exportStar(__nccwpck_require__(23493), exports);
 tslib_1.__exportStar(__nccwpck_require__(59235), exports);
 tslib_1.__exportStar(__nccwpck_require__(37886), exports);
 tslib_1.__exportStar(__nccwpck_require__(38913), exports);
+tslib_1.__exportStar(__nccwpck_require__(50603), exports);
 tslib_1.__exportStar(__nccwpck_require__(90737), exports);
 tslib_1.__exportStar(__nccwpck_require__(45777), exports);
 tslib_1.__exportStar(__nccwpck_require__(90419), exports);
@@ -23780,6 +24134,7 @@ tslib_1.__exportStar(__nccwpck_require__(63042), exports);
 tslib_1.__exportStar(__nccwpck_require__(15593), exports);
 tslib_1.__exportStar(__nccwpck_require__(27689), exports);
 tslib_1.__exportStar(__nccwpck_require__(56674), exports);
+tslib_1.__exportStar(__nccwpck_require__(27736), exports);
 tslib_1.__exportStar(__nccwpck_require__(52608), exports);
 tslib_1.__exportStar(__nccwpck_require__(60192), exports);
 tslib_1.__exportStar(__nccwpck_require__(19279), exports);
@@ -23818,7 +24173,10 @@ tslib_1.__exportStar(__nccwpck_require__(26421), exports);
 tslib_1.__exportStar(__nccwpck_require__(29314), exports);
 tslib_1.__exportStar(__nccwpck_require__(48512), exports);
 tslib_1.__exportStar(__nccwpck_require__(65954), exports);
+tslib_1.__exportStar(__nccwpck_require__(95737), exports);
+tslib_1.__exportStar(__nccwpck_require__(97517), exports);
 tslib_1.__exportStar(__nccwpck_require__(75335), exports);
+tslib_1.__exportStar(__nccwpck_require__(20212), exports);
 tslib_1.__exportStar(__nccwpck_require__(4705), exports);
 tslib_1.__exportStar(__nccwpck_require__(23181), exports);
 tslib_1.__exportStar(__nccwpck_require__(27376), exports);
@@ -23844,6 +24202,7 @@ tslib_1.__exportStar(__nccwpck_require__(98116), exports);
 tslib_1.__exportStar(__nccwpck_require__(58692), exports);
 tslib_1.__exportStar(__nccwpck_require__(18913), exports);
 tslib_1.__exportStar(__nccwpck_require__(84703), exports);
+tslib_1.__exportStar(__nccwpck_require__(43324), exports);
 tslib_1.__exportStar(__nccwpck_require__(17745), exports);
 tslib_1.__exportStar(__nccwpck_require__(45021), exports);
 tslib_1.__exportStar(__nccwpck_require__(12837), exports);
@@ -23882,8 +24241,10 @@ tslib_1.__exportStar(__nccwpck_require__(13262), exports);
 tslib_1.__exportStar(__nccwpck_require__(53092), exports);
 tslib_1.__exportStar(__nccwpck_require__(32657), exports);
 tslib_1.__exportStar(__nccwpck_require__(96059), exports);
+tslib_1.__exportStar(__nccwpck_require__(64424), exports);
 tslib_1.__exportStar(__nccwpck_require__(84511), exports);
 tslib_1.__exportStar(__nccwpck_require__(13720), exports);
+tslib_1.__exportStar(__nccwpck_require__(49382), exports);
 tslib_1.__exportStar(__nccwpck_require__(54164), exports);
 tslib_1.__exportStar(__nccwpck_require__(81019), exports);
 tslib_1.__exportStar(__nccwpck_require__(37959), exports);
@@ -24702,6 +25063,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 2702:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=jqlFunctionPrecomputationUpdateRequest.js.map
+
+/***/ }),
+
 /***/ 15458:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -24859,6 +25230,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=license.js.map
+
+/***/ }),
+
+/***/ 94725:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=licenseMetric.js.map
 
 /***/ }),
 
@@ -25052,6 +25433,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 11094:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=notificationSchemeAndProjectMappingPage.js.map
+
+/***/ }),
+
 /***/ 2307:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -25059,6 +25450,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=notificationSchemeEvent.js.map
+
+/***/ }),
+
+/***/ 38449:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=notificationSchemeId.js.map
 
 /***/ }),
 
@@ -25402,6 +25803,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 31028:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=pageJqlFunctionPrecomputation.js.map
+
+/***/ }),
+
 /***/ 46605:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -25489,6 +25900,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=pageProjectDetails.js.map
+
+/***/ }),
+
+/***/ 50603:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=pageResolution.js.map
 
 /***/ }),
 
@@ -25789,6 +26210,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=projectCategory.js.map
+
+/***/ }),
+
+/***/ 27736:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=projectComponent.js.map
 
 /***/ }),
 
@@ -26172,6 +26603,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 95737:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=reorderIssuePriorities.js.map
+
+/***/ }),
+
+/***/ 97517:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=reorderIssueResolutionsRequest.js.map
+
+/***/ }),
+
 /***/ 75335:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -26179,6 +26630,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=resolution.js.map
+
+/***/ }),
+
+/***/ 20212:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=resolutionId.js.map
 
 /***/ }),
 
@@ -26429,6 +26890,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=setDefaultPriorityRequest.js.map
+
+/***/ }),
+
+/***/ 43324:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=setDefaultResolutionRequest.js.map
 
 /***/ }),
 
@@ -26802,6 +27273,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 64424:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateNotificationSchemeDetails.js.map
+
+/***/ }),
+
 /***/ 84511:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -26819,6 +27300,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=updateProjectDetails.js.map
+
+/***/ }),
+
+/***/ 49382:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateResolutionDetails.js.map
 
 /***/ }),
 
@@ -27379,7 +27870,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Myself = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Myself {
     constructor(client) {
         this.client = client;
@@ -27401,9 +27892,13 @@ class Myself {
             const config = {
                 url: '/rest/api/2/mypreferences',
                 method: 'PUT',
+                headers: {
+                    'Content-Type': typeof parameters.value === 'string' ? 'text/plain' : 'application/json',
+                },
                 params: {
                     key: parameters.key,
                 },
+                data: parameters.value,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -27535,6 +28030,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=addIssueTypesToIssueTypeScheme.js.map
+
+/***/ }),
+
+/***/ 75263:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=addNotifications.js.map
 
 /***/ }),
 
@@ -28018,6 +28523,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 46874:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createNotificationScheme.js.map
+
+/***/ }),
+
 /***/ 68494:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -28095,6 +28610,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=createProjectRole.js.map
+
+/***/ }),
+
+/***/ 17721:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createResolution.js.map
 
 /***/ }),
 
@@ -28498,6 +29023,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 87465:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteNotificationScheme.js.map
+
+/***/ }),
+
 /***/ 95968:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -28515,6 +29050,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=deletePermissionSchemeEntity.js.map
+
+/***/ }),
+
+/***/ 17770:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deletePriority.js.map
 
 /***/ }),
 
@@ -28595,6 +29140,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=deleteRemoteIssueLinkById.js.map
+
+/***/ }),
+
+/***/ 53167:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteResolution.js.map
 
 /***/ }),
 
@@ -30060,6 +30615,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 6518:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=getNotificationSchemeToProjectMappings.js.map
+
+/***/ }),
+
 /***/ 43192:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -30127,6 +30692,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=getPermittedProjects.js.map
+
+/***/ }),
+
+/***/ 33313:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=getPrecomputations.js.map
 
 /***/ }),
 
@@ -30830,7 +31405,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(61605), exports);
 tslib_1.__exportStar(__nccwpck_require__(8163), exports);
 tslib_1.__exportStar(__nccwpck_require__(74778), exports);
@@ -30838,6 +31413,7 @@ tslib_1.__exportStar(__nccwpck_require__(94788), exports);
 tslib_1.__exportStar(__nccwpck_require__(81705), exports);
 tslib_1.__exportStar(__nccwpck_require__(49721), exports);
 tslib_1.__exportStar(__nccwpck_require__(52863), exports);
+tslib_1.__exportStar(__nccwpck_require__(75263), exports);
 tslib_1.__exportStar(__nccwpck_require__(42133), exports);
 tslib_1.__exportStar(__nccwpck_require__(9128), exports);
 tslib_1.__exportStar(__nccwpck_require__(34967), exports);
@@ -30886,6 +31462,7 @@ tslib_1.__exportStar(__nccwpck_require__(67836), exports);
 tslib_1.__exportStar(__nccwpck_require__(939), exports);
 tslib_1.__exportStar(__nccwpck_require__(82429), exports);
 tslib_1.__exportStar(__nccwpck_require__(95792), exports);
+tslib_1.__exportStar(__nccwpck_require__(46874), exports);
 tslib_1.__exportStar(__nccwpck_require__(68494), exports);
 tslib_1.__exportStar(__nccwpck_require__(31862), exports);
 tslib_1.__exportStar(__nccwpck_require__(83593), exports);
@@ -30894,6 +31471,7 @@ tslib_1.__exportStar(__nccwpck_require__(32580), exports);
 tslib_1.__exportStar(__nccwpck_require__(39553), exports);
 tslib_1.__exportStar(__nccwpck_require__(99698), exports);
 tslib_1.__exportStar(__nccwpck_require__(31931), exports);
+tslib_1.__exportStar(__nccwpck_require__(17721), exports);
 tslib_1.__exportStar(__nccwpck_require__(77124), exports);
 tslib_1.__exportStar(__nccwpck_require__(89521), exports);
 tslib_1.__exportStar(__nccwpck_require__(5061), exports);
@@ -30934,8 +31512,10 @@ tslib_1.__exportStar(__nccwpck_require__(64195), exports);
 tslib_1.__exportStar(__nccwpck_require__(10680), exports);
 tslib_1.__exportStar(__nccwpck_require__(45103), exports);
 tslib_1.__exportStar(__nccwpck_require__(90462), exports);
+tslib_1.__exportStar(__nccwpck_require__(87465), exports);
 tslib_1.__exportStar(__nccwpck_require__(95968), exports);
 tslib_1.__exportStar(__nccwpck_require__(33916), exports);
+tslib_1.__exportStar(__nccwpck_require__(17770), exports);
 tslib_1.__exportStar(__nccwpck_require__(12043), exports);
 tslib_1.__exportStar(__nccwpck_require__(47150), exports);
 tslib_1.__exportStar(__nccwpck_require__(60439), exports);
@@ -30944,6 +31524,7 @@ tslib_1.__exportStar(__nccwpck_require__(65013), exports);
 tslib_1.__exportStar(__nccwpck_require__(70808), exports);
 tslib_1.__exportStar(__nccwpck_require__(99272), exports);
 tslib_1.__exportStar(__nccwpck_require__(26186), exports);
+tslib_1.__exportStar(__nccwpck_require__(53167), exports);
 tslib_1.__exportStar(__nccwpck_require__(86327), exports);
 tslib_1.__exportStar(__nccwpck_require__(89424), exports);
 tslib_1.__exportStar(__nccwpck_require__(4678), exports);
@@ -31085,12 +31666,14 @@ tslib_1.__exportStar(__nccwpck_require__(58327), exports);
 tslib_1.__exportStar(__nccwpck_require__(39821), exports);
 tslib_1.__exportStar(__nccwpck_require__(45809), exports);
 tslib_1.__exportStar(__nccwpck_require__(43192), exports);
+tslib_1.__exportStar(__nccwpck_require__(6518), exports);
 tslib_1.__exportStar(__nccwpck_require__(6689), exports);
 tslib_1.__exportStar(__nccwpck_require__(65279), exports);
 tslib_1.__exportStar(__nccwpck_require__(44575), exports);
 tslib_1.__exportStar(__nccwpck_require__(16417), exports);
 tslib_1.__exportStar(__nccwpck_require__(36540), exports);
 tslib_1.__exportStar(__nccwpck_require__(99182), exports);
+tslib_1.__exportStar(__nccwpck_require__(33313), exports);
 tslib_1.__exportStar(__nccwpck_require__(48198), exports);
 tslib_1.__exportStar(__nccwpck_require__(25546), exports);
 tslib_1.__exportStar(__nccwpck_require__(86084), exports);
@@ -31128,6 +31711,7 @@ tslib_1.__exportStar(__nccwpck_require__(34182), exports);
 tslib_1.__exportStar(__nccwpck_require__(46119), exports);
 tslib_1.__exportStar(__nccwpck_require__(47479), exports);
 tslib_1.__exportStar(__nccwpck_require__(87422), exports);
+tslib_1.__exportStar(__nccwpck_require__(87422), exports);
 tslib_1.__exportStar(__nccwpck_require__(47866), exports);
 tslib_1.__exportStar(__nccwpck_require__(27230), exports);
 tslib_1.__exportStar(__nccwpck_require__(19805), exports);
@@ -31161,6 +31745,8 @@ tslib_1.__exportStar(__nccwpck_require__(30115), exports);
 tslib_1.__exportStar(__nccwpck_require__(77233), exports);
 tslib_1.__exportStar(__nccwpck_require__(28491), exports);
 tslib_1.__exportStar(__nccwpck_require__(97174), exports);
+tslib_1.__exportStar(__nccwpck_require__(93733), exports);
+tslib_1.__exportStar(__nccwpck_require__(18593), exports);
 tslib_1.__exportStar(__nccwpck_require__(10082), exports);
 tslib_1.__exportStar(__nccwpck_require__(56132), exports);
 tslib_1.__exportStar(__nccwpck_require__(46893), exports);
@@ -31181,6 +31767,7 @@ tslib_1.__exportStar(__nccwpck_require__(15816), exports);
 tslib_1.__exportStar(__nccwpck_require__(59898), exports);
 tslib_1.__exportStar(__nccwpck_require__(50550), exports);
 tslib_1.__exportStar(__nccwpck_require__(56470), exports);
+tslib_1.__exportStar(__nccwpck_require__(42148), exports);
 tslib_1.__exportStar(__nccwpck_require__(60829), exports);
 tslib_1.__exportStar(__nccwpck_require__(43053), exports);
 tslib_1.__exportStar(__nccwpck_require__(20747), exports);
@@ -31202,6 +31789,7 @@ tslib_1.__exportStar(__nccwpck_require__(88306), exports);
 tslib_1.__exportStar(__nccwpck_require__(44747), exports);
 tslib_1.__exportStar(__nccwpck_require__(75920), exports);
 tslib_1.__exportStar(__nccwpck_require__(59889), exports);
+tslib_1.__exportStar(__nccwpck_require__(93893), exports);
 tslib_1.__exportStar(__nccwpck_require__(26109), exports);
 tslib_1.__exportStar(__nccwpck_require__(88868), exports);
 tslib_1.__exportStar(__nccwpck_require__(81931), exports);
@@ -31210,6 +31798,7 @@ tslib_1.__exportStar(__nccwpck_require__(8787), exports);
 tslib_1.__exportStar(__nccwpck_require__(55197), exports);
 tslib_1.__exportStar(__nccwpck_require__(32649), exports);
 tslib_1.__exportStar(__nccwpck_require__(56476), exports);
+tslib_1.__exportStar(__nccwpck_require__(83881), exports);
 tslib_1.__exportStar(__nccwpck_require__(79051), exports);
 tslib_1.__exportStar(__nccwpck_require__(4848), exports);
 tslib_1.__exportStar(__nccwpck_require__(26378), exports);
@@ -31256,7 +31845,9 @@ tslib_1.__exportStar(__nccwpck_require__(25232), exports);
 tslib_1.__exportStar(__nccwpck_require__(65036), exports);
 tslib_1.__exportStar(__nccwpck_require__(57761), exports);
 tslib_1.__exportStar(__nccwpck_require__(98611), exports);
+tslib_1.__exportStar(__nccwpck_require__(73078), exports);
 tslib_1.__exportStar(__nccwpck_require__(72924), exports);
+tslib_1.__exportStar(__nccwpck_require__(76022), exports);
 tslib_1.__exportStar(__nccwpck_require__(18444), exports);
 tslib_1.__exportStar(__nccwpck_require__(29295), exports);
 tslib_1.__exportStar(__nccwpck_require__(51149), exports);
@@ -31264,6 +31855,7 @@ tslib_1.__exportStar(__nccwpck_require__(8737), exports);
 tslib_1.__exportStar(__nccwpck_require__(75329), exports);
 tslib_1.__exportStar(__nccwpck_require__(82941), exports);
 tslib_1.__exportStar(__nccwpck_require__(36215), exports);
+tslib_1.__exportStar(__nccwpck_require__(3739), exports);
 tslib_1.__exportStar(__nccwpck_require__(61030), exports);
 tslib_1.__exportStar(__nccwpck_require__(58711), exports);
 tslib_1.__exportStar(__nccwpck_require__(19047), exports);
@@ -31318,6 +31910,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=migrateQueries.js.map
+
+/***/ }),
+
+/***/ 93733:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=movePriorities.js.map
+
+/***/ }),
+
+/***/ 18593:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=moveResolutions.js.map
 
 /***/ }),
 
@@ -31518,6 +32130,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=removeModules.js.map
+
+/***/ }),
+
+/***/ 42148:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=removeNotificationFromNotificationScheme.js.map
 
 /***/ }),
 
@@ -31731,6 +32353,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 93893:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=searchResolutions.js.map
+
+/***/ }),
+
 /***/ 26109:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -31808,6 +32440,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=setDefaultPriority.js.map
+
+/***/ }),
+
+/***/ 83881:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=setDefaultResolution.js.map
 
 /***/ }),
 
@@ -32261,6 +32903,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 73078:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateNotificationScheme.js.map
+
+/***/ }),
+
 /***/ 72924:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -32268,6 +32920,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=updatePermissionScheme.js.map
+
+/***/ }),
+
+/***/ 76022:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updatePrecomputations.js.map
 
 /***/ }),
 
@@ -32338,6 +33000,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=updateRemoteIssueLink.js.map
+
+/***/ }),
+
+/***/ 3739:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateResolution.js.map
 
 /***/ }),
 
@@ -32478,7 +33150,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.PermissionSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class PermissionSchemes {
     constructor(client) {
         this.client = client;
@@ -32510,11 +33182,12 @@ class PermissionSchemes {
     }
     getPermissionScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const schemeId = typeof parameters === 'string' ? parameters : parameters.schemeId;
             const config = {
-                url: `/rest/api/2/permissionscheme/${parameters.schemeId}`,
+                url: `/rest/api/2/permissionscheme/${schemeId}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -32606,7 +33279,7 @@ exports.PermissionSchemes = PermissionSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Permissions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Permissions {
     constructor(client) {
         this.client = client;
@@ -32678,7 +33351,7 @@ exports.Permissions = Permissions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectAvatars = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectAvatars {
     constructor(client) {
         this.client = client;
@@ -32720,14 +33393,16 @@ class ProjectAvatars {
                     y: parameters.y,
                     size: parameters.size,
                 },
+                data: parameters.avatar,
             };
             return this.client.sendRequest(config, callback);
         });
     }
     getAllProjectAvatars(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/avatars`,
+                url: `/rest/api/2/project/${projectIdOrKey}/avatars`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -32746,7 +33421,7 @@ exports.ProjectAvatars = ProjectAvatars;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectCategories = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectCategories {
     constructor(client) {
         this.client = client;
@@ -32766,10 +33441,10 @@ class ProjectCategories {
                 url: '/rest/api/2/projectCategory',
                 method: 'POST',
                 data: {
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    description: parameters.description,
+                    id: parameters.id,
+                    name: parameters.name,
+                    self: parameters.self,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -32777,8 +33452,9 @@ class ProjectCategories {
     }
     getProjectCategoryById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/projectCategory/${parameters.id}`,
+                url: `/rest/api/2/projectCategory/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -32799,8 +33475,9 @@ class ProjectCategories {
     }
     removeProjectCategory(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/projectCategory/${parameters.id}`,
+                url: `/rest/api/2/projectCategory/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -32819,7 +33496,7 @@ exports.ProjectCategories = ProjectCategories;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectComponents = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectComponents {
     constructor(client) {
         this.client = client;
@@ -32830,20 +33507,20 @@ class ProjectComponents {
                 url: '/rest/api/2/component',
                 method: 'POST',
                 data: {
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    lead: parameters === null || parameters === void 0 ? void 0 : parameters.lead,
-                    leadUserName: parameters === null || parameters === void 0 ? void 0 : parameters.leadUserName,
-                    leadAccountId: parameters === null || parameters === void 0 ? void 0 : parameters.leadAccountId,
-                    assigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.assigneeType,
-                    assignee: parameters === null || parameters === void 0 ? void 0 : parameters.assignee,
-                    realAssigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.realAssigneeType,
-                    realAssignee: parameters === null || parameters === void 0 ? void 0 : parameters.realAssignee,
-                    isAssigneeTypeValid: parameters === null || parameters === void 0 ? void 0 : parameters.isAssigneeTypeValid,
-                    project: parameters === null || parameters === void 0 ? void 0 : parameters.project,
-                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
+                    assignee: parameters.assignee,
+                    assigneeType: parameters.assigneeType,
+                    description: parameters.description,
+                    id: parameters.id,
+                    isAssigneeTypeValid: parameters.isAssigneeTypeValid,
+                    lead: parameters.lead,
+                    leadAccountId: parameters.leadAccountId,
+                    leadUserName: parameters.leadUserName,
+                    name: parameters.name,
+                    project: parameters.project,
+                    projectId: parameters.projectId,
+                    realAssignee: parameters.realAssignee,
+                    realAssigneeType: parameters.realAssigneeType,
+                    self: parameters.self,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -32851,8 +33528,9 @@ class ProjectComponents {
     }
     getComponent(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/component/${parameters.id}`,
+                url: `/rest/api/2/component/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -32877,11 +33555,12 @@ class ProjectComponents {
     }
     deleteComponent(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/component/${parameters.id}`,
+                url: `/rest/api/2/component/${id}`,
                 method: 'DELETE',
                 params: {
-                    moveIssuesTo: parameters.moveIssuesTo,
+                    moveIssuesTo: typeof parameters !== 'string' && parameters.moveIssuesTo,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -32889,8 +33568,9 @@ class ProjectComponents {
     }
     getComponentRelatedIssues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/component/${parameters.id}/relatedIssueCounts`,
+                url: `/rest/api/2/component/${id}/relatedIssueCounts`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -32913,8 +33593,9 @@ class ProjectComponents {
     }
     getProjectComponents(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/components`,
+                url: `/rest/api/2/project/${projectIdOrKey}/components`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -32933,15 +33614,16 @@ exports.ProjectComponents = ProjectComponents;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectEmail = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectEmail {
     constructor(client) {
         this.client = client;
     }
     getProjectEmail(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectId = typeof parameters === 'string' ? parameters : parameters.projectId;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectId}/email`,
+                url: `/rest/api/2/project/${projectId}/email`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -32973,15 +33655,16 @@ exports.ProjectEmail = ProjectEmail;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectFeatures = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectFeatures {
     constructor(client) {
         this.client = client;
     }
     getFeaturesForProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/features`,
+                url: `/rest/api/2/project/${projectIdOrKey}/features`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33012,18 +33695,19 @@ exports.ProjectFeatures = ProjectFeatures;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectKeyAndNameValidation = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectKeyAndNameValidation {
     constructor(client) {
         this.client = client;
     }
     validateProjectKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const key = typeof parameters === 'string' ? parameters : parameters === null || parameters === void 0 ? void 0 : parameters.key;
             const config = {
                 url: '/rest/api/2/projectvalidate/key',
                 method: 'GET',
                 params: {
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
+                    key,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33031,11 +33715,12 @@ class ProjectKeyAndNameValidation {
     }
     getValidProjectKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const key = typeof parameters === 'string' ? parameters : parameters === null || parameters === void 0 ? void 0 : parameters.key;
             const config = {
                 url: '/rest/api/2/projectvalidate/validProjectKey',
                 method: 'GET',
                 params: {
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
+                    key,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33043,11 +33728,12 @@ class ProjectKeyAndNameValidation {
     }
     getValidProjectName(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const name = typeof parameters === 'string' ? parameters : parameters.name;
             const config = {
                 url: '/rest/api/2/projectvalidate/validProjectName',
                 method: 'GET',
                 params: {
-                    name: parameters.name,
+                    name,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33066,15 +33752,16 @@ exports.ProjectKeyAndNameValidation = ProjectKeyAndNameValidation;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectPermissionSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectPermissionSchemes {
     constructor(client) {
         this.client = client;
     }
     getProjectIssueSecurityScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectKeyOrId}/issuesecuritylevelscheme`,
+                url: `/rest/api/2/project/${projectKeyOrId}/issuesecuritylevelscheme`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33082,11 +33769,12 @@ class ProjectPermissionSchemes {
     }
     getAssignedPermissionScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectKeyOrId}/permissionscheme`,
+                url: `/rest/api/2/project/${projectKeyOrId}/permissionscheme`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33109,8 +33797,9 @@ class ProjectPermissionSchemes {
     }
     getSecurityLevelsForProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectKeyOrId}/securitylevel`,
+                url: `/rest/api/2/project/${projectKeyOrId}/securitylevel`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33129,15 +33818,16 @@ exports.ProjectPermissionSchemes = ProjectPermissionSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectProperties {
     constructor(client) {
         this.client = client;
     }
     getProjectPropertyKeys(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/properties`,
+                url: `/rest/api/2/project/${projectIdOrKey}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33157,6 +33847,7 @@ class ProjectProperties {
             const config = {
                 url: `/rest/api/2/project/${parameters.projectIdOrKey}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.property,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -33183,7 +33874,7 @@ exports.ProjectProperties = ProjectProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectRoleActors = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectRoleActors {
     constructor(client) {
         this.client = client;
@@ -33230,8 +33921,9 @@ class ProjectRoleActors {
     }
     getProjectRoleActorsForRole(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/role/${parameters.id}/actors`,
+                url: `/rest/api/2/role/${id}/actors`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33278,15 +33970,16 @@ exports.ProjectRoleActors = ProjectRoleActors;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectRoles = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectRoles {
     constructor(client) {
         this.client = client;
     }
     getProjectRoles(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/role`,
+                url: `/rest/api/2/project/${projectIdOrKey}/role`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33306,12 +33999,13 @@ class ProjectRoles {
     }
     getProjectRoleDetails(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/roledetails`,
+                url: `/rest/api/2/project/${projectIdOrKey}/roledetails`,
                 method: 'GET',
                 params: {
-                    currentMember: parameters.currentMember,
-                    excludeConnectAddons: parameters.excludeConnectAddons,
+                    currentMember: typeof parameters !== 'string' && parameters.currentMember,
+                    excludeConnectAddons: typeof parameters !== 'string' && parameters.excludeConnectAddons,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33332,8 +34026,8 @@ class ProjectRoles {
                 url: '/rest/api/2/role',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    name: parameters.name,
+                    description: parameters.description,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33341,8 +34035,9 @@ class ProjectRoles {
     }
     getProjectRoleById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/role/${parameters.id}`,
+                url: `/rest/api/2/role/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33376,11 +34071,12 @@ class ProjectRoles {
     }
     deleteProjectRole(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/role/${parameters.id}`,
+                url: `/rest/api/2/role/${id}`,
                 method: 'DELETE',
                 params: {
-                    swap: parameters.swap,
+                    swap: typeof parameters !== 'string' && parameters.swap,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33399,7 +34095,7 @@ exports.ProjectRoles = ProjectRoles;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectTypes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectTypes {
     constructor(client) {
         this.client = client;
@@ -33424,8 +34120,9 @@ class ProjectTypes {
     }
     getProjectTypeByKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectTypeKey = typeof parameters === 'string' ? parameters : parameters.projectTypeKey;
             const config = {
-                url: `/rest/api/2/project/type/${parameters.projectTypeKey}`,
+                url: `/rest/api/2/project/type/${projectTypeKey}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33433,8 +34130,9 @@ class ProjectTypes {
     }
     getAccessibleProjectTypeByKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectTypeKey = typeof parameters === 'string' ? parameters : parameters.projectTypeKey;
             const config = {
-                url: `/rest/api/2/project/type/${parameters.projectTypeKey}/accessible`,
+                url: `/rest/api/2/project/type/${projectTypeKey}/accessible`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33453,23 +34151,24 @@ exports.ProjectTypes = ProjectTypes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectVersions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectVersions {
     constructor(client) {
         this.client = client;
     }
     getProjectVersionsPaginated(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/version`,
+                url: `/rest/api/2/project/${projectIdOrKey}/version`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    orderBy: parameters.orderBy,
-                    query: parameters.query,
-                    status: parameters.status,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    orderBy: typeof parameters !== 'string' && parameters.orderBy,
+                    query: typeof parameters !== 'string' && parameters.query,
+                    status: typeof parameters !== 'string' && parameters.status,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33477,11 +34176,12 @@ class ProjectVersions {
     }
     getProjectVersions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/versions`,
+                url: `/rest/api/2/project/${projectIdOrKey}/versions`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33493,23 +34193,23 @@ class ProjectVersions {
                 url: '/rest/api/2/version',
                 method: 'POST',
                 data: {
-                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    archived: parameters === null || parameters === void 0 ? void 0 : parameters.archived,
-                    released: parameters === null || parameters === void 0 ? void 0 : parameters.released,
-                    startDate: parameters === null || parameters === void 0 ? void 0 : parameters.startDate,
-                    releaseDate: parameters === null || parameters === void 0 ? void 0 : parameters.releaseDate,
-                    overdue: parameters === null || parameters === void 0 ? void 0 : parameters.overdue,
-                    userStartDate: parameters === null || parameters === void 0 ? void 0 : parameters.userStartDate,
-                    userReleaseDate: parameters === null || parameters === void 0 ? void 0 : parameters.userReleaseDate,
-                    project: parameters === null || parameters === void 0 ? void 0 : parameters.project,
-                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
-                    moveUnfixedIssuesTo: parameters === null || parameters === void 0 ? void 0 : parameters.moveUnfixedIssuesTo,
-                    operations: parameters === null || parameters === void 0 ? void 0 : parameters.operations,
-                    issuesStatusForFixVersion: parameters === null || parameters === void 0 ? void 0 : parameters.issuesStatusForFixVersion,
+                    expand: parameters.expand,
+                    self: parameters.self,
+                    id: parameters.id,
+                    description: parameters.description,
+                    name: parameters.name,
+                    archived: parameters.archived,
+                    released: parameters.released,
+                    startDate: parameters.startDate,
+                    releaseDate: parameters.releaseDate,
+                    overdue: parameters.overdue,
+                    userStartDate: parameters.userStartDate,
+                    userReleaseDate: parameters.userReleaseDate,
+                    project: parameters.project,
+                    projectId: parameters.projectId,
+                    moveUnfixedIssuesTo: parameters.moveUnfixedIssuesTo,
+                    operations: parameters.operations,
+                    issuesStatusForFixVersion: parameters.issuesStatusForFixVersion,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33517,11 +34217,12 @@ class ProjectVersions {
     }
     getVersion(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/version/${parameters.id}`,
+                url: `/rest/api/2/version/${id}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33585,8 +34286,9 @@ class ProjectVersions {
     }
     getVersionRelatedIssues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/version/${parameters.id}/relatedIssueCounts`,
+                url: `/rest/api/2/version/${id}/relatedIssueCounts`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33608,8 +34310,9 @@ class ProjectVersions {
     }
     getVersionUnresolvedIssues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/version/${parameters.id}/unresolvedIssueCount`,
+                url: `/rest/api/2/version/${id}/unresolvedIssueCount`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33628,7 +34331,7 @@ exports.ProjectVersions = ProjectVersions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Projects = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Projects {
     constructor(client) {
         this.client = client;
@@ -33653,24 +34356,24 @@ class Projects {
                 url: '/rest/api/2/project',
                 method: 'POST',
                 data: {
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    lead: parameters === null || parameters === void 0 ? void 0 : parameters.lead,
-                    leadAccountId: parameters === null || parameters === void 0 ? void 0 : parameters.leadAccountId,
-                    url: parameters === null || parameters === void 0 ? void 0 : parameters.url,
-                    assigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.assigneeType,
-                    avatarId: parameters === null || parameters === void 0 ? void 0 : parameters.avatarId,
-                    issueSecurityScheme: parameters === null || parameters === void 0 ? void 0 : parameters.issueSecurityScheme,
-                    permissionScheme: parameters === null || parameters === void 0 ? void 0 : parameters.permissionScheme,
-                    notificationScheme: parameters === null || parameters === void 0 ? void 0 : parameters.notificationScheme,
-                    categoryId: parameters === null || parameters === void 0 ? void 0 : parameters.categoryId,
-                    projectTypeKey: parameters === null || parameters === void 0 ? void 0 : parameters.projectTypeKey,
-                    projectTemplateKey: parameters === null || parameters === void 0 ? void 0 : parameters.projectTemplateKey,
-                    workflowScheme: parameters === null || parameters === void 0 ? void 0 : parameters.workflowScheme,
-                    issueTypeScreenScheme: parameters === null || parameters === void 0 ? void 0 : parameters.issueTypeScreenScheme,
-                    issueTypeScheme: parameters === null || parameters === void 0 ? void 0 : parameters.issueTypeScheme,
-                    fieldConfigurationScheme: parameters === null || parameters === void 0 ? void 0 : parameters.fieldConfigurationScheme,
+                    key: parameters.key,
+                    name: parameters.name,
+                    description: parameters.description,
+                    lead: parameters.lead,
+                    leadAccountId: parameters.leadAccountId,
+                    url: parameters.url,
+                    assigneeType: parameters.assigneeType,
+                    avatarId: parameters.avatarId,
+                    issueSecurityScheme: parameters.issueSecurityScheme,
+                    permissionScheme: parameters.permissionScheme,
+                    notificationScheme: parameters.notificationScheme,
+                    categoryId: parameters.categoryId,
+                    projectTypeKey: parameters.projectTypeKey,
+                    projectTemplateKey: parameters.projectTemplateKey,
+                    workflowScheme: parameters.workflowScheme,
+                    issueTypeScreenScheme: parameters.issueTypeScreenScheme,
+                    issueTypeScheme: parameters.issueTypeScheme,
+                    fieldConfigurationScheme: parameters.fieldConfigurationScheme,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33715,12 +34418,13 @@ class Projects {
     }
     getProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}`,
+                url: `/rest/api/2/project/${projectIdOrKey}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
-                    properties: parameters.properties,
+                    expand: typeof parameters !== 'string' && parameters.expand,
+                    properties: typeof parameters !== 'string' && parameters.properties,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33756,11 +34460,12 @@ class Projects {
     }
     deleteProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}`,
+                url: `/rest/api/2/project/${projectIdOrKey}`,
                 method: 'DELETE',
                 params: {
-                    enableUndo: parameters.enableUndo,
+                    enableUndo: typeof parameters !== 'string' && parameters.enableUndo,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33768,8 +34473,9 @@ class Projects {
     }
     archiveProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/archive`,
+                url: `/rest/api/2/project/${projectIdOrKey}/archive`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -33777,8 +34483,9 @@ class Projects {
     }
     deleteProjectAsynchronously(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/delete`,
+                url: `/rest/api/2/project/${projectIdOrKey}/delete`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -33786,8 +34493,9 @@ class Projects {
     }
     restore(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/restore`,
+                url: `/rest/api/2/project/${projectIdOrKey}/restore`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -33795,8 +34503,9 @@ class Projects {
     }
     getAllStatuses(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectIdOrKey}/statuses`,
+                url: `/rest/api/2/project/${projectIdOrKey}/statuses`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33813,8 +34522,9 @@ class Projects {
     }
     getHierarchy(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectId = typeof parameters === 'string' ? parameters : parameters.projectId;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectId}/hierarchy`,
+                url: `/rest/api/2/project/${projectId}/hierarchy`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -33822,11 +34532,12 @@ class Projects {
     }
     getNotificationSchemeForProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/2/project/${parameters.projectKeyOrId}/notificationscheme`,
+                url: `/rest/api/2/project/${projectKeyOrId}/notificationscheme`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33845,7 +34556,7 @@ exports.Projects = Projects;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ScreenSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ScreenSchemes {
     constructor(client) {
         this.client = client;
@@ -33869,13 +34580,14 @@ class ScreenSchemes {
     }
     createScreenScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const name = typeof parameters === 'string' ? parameters : parameters.name;
             const config = {
                 url: '/rest/api/2/screenscheme',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    screens: parameters === null || parameters === void 0 ? void 0 : parameters.screens,
+                    name,
+                    description: typeof parameters !== 'string' && parameters.description,
+                    screens: typeof parameters !== 'string' && parameters.screens,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -33897,8 +34609,9 @@ class ScreenSchemes {
     }
     deleteScreenScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenSchemeId = typeof parameters === 'string' ? parameters : parameters.screenSchemeId;
             const config = {
-                url: `/rest/api/2/screenscheme/${parameters.screenSchemeId}`,
+                url: `/rest/api/2/screenscheme/${screenSchemeId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -33917,7 +34630,7 @@ exports.ScreenSchemes = ScreenSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ScreenTabFields = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ScreenTabFields {
     constructor(client) {
         this.client = client;
@@ -33981,18 +34694,19 @@ exports.ScreenTabFields = ScreenTabFields;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ScreenTabs = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ScreenTabs {
     constructor(client) {
         this.client = client;
     }
     getAllScreenTabs(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenId = typeof parameters === 'string' ? parameters : parameters.screenId;
             const config = {
-                url: `/rest/api/2/screens/${parameters.screenId}/tabs`,
+                url: `/rest/api/2/screens/${screenId}/tabs`,
                 method: 'GET',
                 params: {
-                    projectKey: parameters.projectKey,
+                    projectKey: typeof parameters !== 'string' && parameters.projectKey,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34055,20 +34769,21 @@ exports.ScreenTabs = ScreenTabs;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Screens = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Screens {
     constructor(client) {
         this.client = client;
     }
     getScreensForField(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/2/field/${parameters.fieldId}/screens`,
+                url: `/rest/api/2/field/${fieldId}/screens`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34097,8 +34812,8 @@ class Screens {
                 url: '/rest/api/2/screens',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    name: parameters.name,
+                    description: parameters.description,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34106,8 +34821,9 @@ class Screens {
     }
     addFieldToDefaultScreen(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/2/screens/addToDefault/${parameters.fieldId}`,
+                url: `/rest/api/2/screens/addToDefault/${fieldId}`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -34128,8 +34844,9 @@ class Screens {
     }
     deleteScreen(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenId = typeof parameters === 'string' ? parameters : parameters.screenId;
             const config = {
-                url: `/rest/api/2/screens/${parameters.screenId}`,
+                url: `/rest/api/2/screens/${screenId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -34137,8 +34854,9 @@ class Screens {
     }
     getAvailableScreenFields(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenId = typeof parameters === 'string' ? parameters : parameters.screenId;
             const config = {
-                url: `/rest/api/2/screens/${parameters.screenId}/availableFields`,
+                url: `/rest/api/2/screens/${screenId}/availableFields`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -34157,7 +34875,7 @@ exports.Screens = Screens;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ServerInfo = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ServerInfo {
     constructor(client) {
         this.client = client;
@@ -34184,19 +34902,20 @@ exports.ServerInfo = ServerInfo;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Status = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Status {
     constructor(client) {
         this.client = client;
     }
     getStatusesById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
                 url: '/rest/api/2/statuses',
                 method: 'GET',
                 params: {
-                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    id,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34208,8 +34927,8 @@ class Status {
                 url: '/rest/api/2/statuses',
                 method: 'POST',
                 data: {
-                    statuses: parameters === null || parameters === void 0 ? void 0 : parameters.statuses,
-                    scope: parameters === null || parameters === void 0 ? void 0 : parameters.scope,
+                    statuses: parameters.statuses,
+                    scope: parameters.scope,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34221,7 +34940,7 @@ class Status {
                 url: '/rest/api/2/statuses',
                 method: 'PUT',
                 data: {
-                    statuses: parameters === null || parameters === void 0 ? void 0 : parameters.statuses,
+                    statuses: parameters.statuses,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34229,11 +34948,12 @@ class Status {
     }
     deleteStatusesById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
                 url: '/rest/api/2/statuses',
                 method: 'DELETE',
                 params: {
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    id,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34269,15 +34989,16 @@ exports.Status = Status;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Tasks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Tasks {
     constructor(client) {
         this.client = client;
     }
     getTask(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const taskId = typeof parameters === 'string' ? parameters : parameters.taskId;
             const config = {
-                url: `/rest/api/2/task/${parameters.taskId}`,
+                url: `/rest/api/2/task/${taskId}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -34285,8 +35006,9 @@ class Tasks {
     }
     cancelTask(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const taskId = typeof parameters === 'string' ? parameters : parameters.taskId;
             const config = {
-                url: `/rest/api/2/task/${parameters.taskId}/cancel`,
+                url: `/rest/api/2/task/${taskId}/cancel`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -34305,7 +35027,7 @@ exports.Tasks = Tasks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.TimeTracking = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class TimeTracking {
     constructor(client) {
         this.client = client;
@@ -34379,7 +35101,7 @@ exports.TimeTracking = TimeTracking;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.UIModificationsApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class UIModificationsApps {
     constructor(client) {
         this.client = client;
@@ -34404,10 +35126,10 @@ class UIModificationsApps {
                 url: '/rest/api/2/uiModifications',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    data: parameters === null || parameters === void 0 ? void 0 : parameters.data,
-                    contexts: parameters === null || parameters === void 0 ? void 0 : parameters.contexts,
+                    name: parameters.name,
+                    description: parameters.description,
+                    data: parameters.data,
+                    contexts: parameters.contexts,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34430,8 +35152,9 @@ class UIModificationsApps {
     }
     deleteUiModification(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const uiModificationId = typeof parameters === 'string' ? parameters : parameters.uiModificationId;
             const config = {
-                url: `/rest/api/2/uiModifications/${parameters.uiModificationId}`,
+                url: `/rest/api/2/uiModifications/${uiModificationId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -34450,7 +35173,7 @@ exports.UIModificationsApps = UIModificationsApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.UserProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class UserProperties {
     constructor(client) {
         this.client = client;
@@ -34493,6 +35216,7 @@ class UserProperties {
                     userKey: parameters.userKey,
                     username: parameters.username,
                 },
+                data: parameters.propertyValue,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -34524,7 +35248,8 @@ exports.UserProperties = UserProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.UserSearch = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
+const paramSerializer_1 = __nccwpck_require__(52517);
 class UserSearch {
     constructor(client) {
         this.client = client;
@@ -34596,7 +35321,7 @@ class UserSearch {
                     maxResults: parameters.maxResults,
                     showAvatar: parameters.showAvatar,
                     exclude: parameters.exclude,
-                    excludeAccountIds: parameters.excludeAccountIds,
+                    excludeAccountIds: (0, paramSerializer_1.paramSerializer)('excludeAccountIds', parameters.excludeAccountIds),
                     avatarSize: parameters.avatarSize,
                     excludeConnectUsers: parameters.excludeConnectUsers,
                 },
@@ -34680,7 +35405,7 @@ exports.UserSearch = UserSearch;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Users = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const paramSerializer_1 = __nccwpck_require__(52517);
 class Users {
     constructor(client) {
@@ -34707,13 +35432,13 @@ class Users {
                 url: '/rest/api/2/user',
                 method: 'POST',
                 data: {
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    password: parameters === null || parameters === void 0 ? void 0 : parameters.password,
-                    emailAddress: parameters === null || parameters === void 0 ? void 0 : parameters.emailAddress,
-                    displayName: parameters === null || parameters === void 0 ? void 0 : parameters.displayName,
-                    applicationKeys: parameters === null || parameters === void 0 ? void 0 : parameters.applicationKeys,
+                    self: parameters.self,
+                    key: parameters.key,
+                    name: parameters.name,
+                    password: parameters.password,
+                    emailAddress: parameters.emailAddress,
+                    displayName: parameters.displayName,
+                    applicationKeys: parameters.applicationKeys,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34785,6 +35510,7 @@ class Users {
                 params: {
                     accountId: parameters === null || parameters === void 0 ? void 0 : parameters.accountId,
                 },
+                data: parameters === null || parameters === void 0 ? void 0 : parameters.columns,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -34795,8 +35521,8 @@ class Users {
                 url: '/rest/api/2/user/columns',
                 method: 'DELETE',
                 params: {
-                    accountId: parameters === null || parameters === void 0 ? void 0 : parameters.accountId,
-                    username: parameters === null || parameters === void 0 ? void 0 : parameters.username,
+                    accountId: parameters.accountId,
+                    username: parameters.username,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34804,11 +35530,12 @@ class Users {
     }
     getUserEmail(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const accountId = typeof parameters === 'string' ? parameters : parameters.accountId;
             const config = {
                 url: '/rest/api/2/user/email',
                 method: 'GET',
                 params: {
-                    accountId: parameters.accountId,
+                    accountId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34816,11 +35543,12 @@ class Users {
     }
     getUserEmailBulk(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const accountId = typeof parameters === 'string' ? parameters : parameters.accountId;
             const config = {
                 url: '/rest/api/2/user/email/bulk',
                 method: 'GET',
                 params: {
-                    accountId: parameters.accountId,
+                    accountId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34879,7 +35607,7 @@ exports.Users = Users;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Webhooks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Webhooks {
     constructor(client) {
         this.client = client;
@@ -34903,8 +35631,8 @@ class Webhooks {
                 url: '/rest/api/2/webhook',
                 method: 'POST',
                 data: {
-                    webhooks: parameters === null || parameters === void 0 ? void 0 : parameters.webhooks,
-                    url: parameters === null || parameters === void 0 ? void 0 : parameters.url,
+                    webhooks: parameters.webhooks,
+                    url: parameters.url,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34916,7 +35644,7 @@ class Webhooks {
                 url: '/rest/api/2/webhook',
                 method: 'DELETE',
                 data: {
-                    webhookIds: parameters === null || parameters === void 0 ? void 0 : parameters.webhookIds,
+                    webhookIds: parameters.webhookIds,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34941,7 +35669,7 @@ class Webhooks {
                 url: '/rest/api/2/webhook/refresh',
                 method: 'PUT',
                 data: {
-                    webhookIds: parameters === null || parameters === void 0 ? void 0 : parameters.webhookIds,
+                    webhookIds: parameters.webhookIds,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -34960,15 +35688,16 @@ exports.Webhooks = Webhooks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowSchemeDrafts = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowSchemeDrafts {
     constructor(client) {
         this.client = client;
     }
     createWorkflowSchemeDraftFromParent(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/createdraft`,
+                url: `/rest/api/2/workflowscheme/${id}/createdraft`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -34976,8 +35705,9 @@ class WorkflowSchemeDrafts {
     }
     getWorkflowSchemeDraft(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/draft`,
+                url: `/rest/api/2/workflowscheme/${id}/draft`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35001,8 +35731,9 @@ class WorkflowSchemeDrafts {
     }
     deleteWorkflowSchemeDraft(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/draft`,
+                url: `/rest/api/2/workflowscheme/${id}/draft`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -35010,8 +35741,9 @@ class WorkflowSchemeDrafts {
     }
     getDraftDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/draft/default`,
+                url: `/rest/api/2/workflowscheme/${id}/draft/default`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35032,8 +35764,9 @@ class WorkflowSchemeDrafts {
     }
     deleteDraftDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/draft/default`,
+                url: `/rest/api/2/workflowscheme/${id}/draft/default`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -35069,14 +35802,15 @@ class WorkflowSchemeDrafts {
     }
     publishDraftWorkflowScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/draft/publish`,
+                url: `/rest/api/2/workflowscheme/${id}/draft/publish`,
                 method: 'POST',
                 params: {
-                    validateOnly: parameters.validateOnly,
+                    validateOnly: typeof parameters !== 'string' && parameters.validateOnly,
                 },
                 data: {
-                    statusMappings: parameters.statusMappings,
+                    statusMappings: typeof parameters !== 'string' && parameters.statusMappings,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35137,7 +35871,7 @@ exports.WorkflowSchemeDrafts = WorkflowSchemeDrafts;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowSchemeProjectAssociations = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowSchemeProjectAssociations {
     constructor(client) {
         this.client = client;
@@ -35186,7 +35920,7 @@ exports.WorkflowSchemeProjectAssociations = WorkflowSchemeProjectAssociations;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowSchemes {
     constructor(client) {
         this.client = client;
@@ -35210,19 +35944,19 @@ class WorkflowSchemes {
                 url: '/rest/api/2/workflowscheme',
                 method: 'POST',
                 data: {
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    defaultWorkflow: parameters === null || parameters === void 0 ? void 0 : parameters.defaultWorkflow,
-                    issueTypeMappings: parameters === null || parameters === void 0 ? void 0 : parameters.issueTypeMappings,
-                    originalDefaultWorkflow: parameters === null || parameters === void 0 ? void 0 : parameters.originalDefaultWorkflow,
-                    originalIssueTypeMappings: parameters === null || parameters === void 0 ? void 0 : parameters.originalIssueTypeMappings,
-                    draft: parameters === null || parameters === void 0 ? void 0 : parameters.draft,
-                    lastModifiedUser: parameters === null || parameters === void 0 ? void 0 : parameters.lastModifiedUser,
-                    lastModified: parameters === null || parameters === void 0 ? void 0 : parameters.lastModified,
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    updateDraftIfNeeded: parameters === null || parameters === void 0 ? void 0 : parameters.updateDraftIfNeeded,
-                    issueTypes: parameters === null || parameters === void 0 ? void 0 : parameters.issueTypes,
+                    id: parameters.id,
+                    name: parameters.name,
+                    description: parameters.description,
+                    defaultWorkflow: parameters.defaultWorkflow,
+                    issueTypeMappings: parameters.issueTypeMappings,
+                    originalDefaultWorkflow: parameters.originalDefaultWorkflow,
+                    originalIssueTypeMappings: parameters.originalIssueTypeMappings,
+                    draft: parameters.draft,
+                    lastModifiedUser: parameters.lastModifiedUser,
+                    lastModified: parameters.lastModified,
+                    self: parameters.self,
+                    updateDraftIfNeeded: parameters.updateDraftIfNeeded,
+                    issueTypes: parameters.issueTypes,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35230,11 +35964,12 @@ class WorkflowSchemes {
     }
     getWorkflowScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}`,
+                url: `/rest/api/2/workflowscheme/${id}`,
                 method: 'GET',
                 params: {
-                    returnDraftIfExists: parameters.returnDraftIfExists,
+                    returnDraftIfExists: typeof parameters !== 'string' && parameters.returnDraftIfExists,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35258,8 +35993,9 @@ class WorkflowSchemes {
     }
     deleteWorkflowScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}`,
+                url: `/rest/api/2/workflowscheme/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -35267,11 +36003,12 @@ class WorkflowSchemes {
     }
     getDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/default`,
+                url: `/rest/api/2/workflowscheme/${id}/default`,
                 method: 'GET',
                 params: {
-                    returnDraftIfExists: parameters.returnDraftIfExists,
+                    returnDraftIfExists: typeof parameters !== 'string' && parameters.returnDraftIfExists,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35292,11 +36029,12 @@ class WorkflowSchemes {
     }
     deleteDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/default`,
+                url: `/rest/api/2/workflowscheme/${id}/default`,
                 method: 'DELETE',
                 params: {
-                    updateDraftIfNeeded: parameters.updateDraftIfNeeded,
+                    updateDraftIfNeeded: typeof parameters !== 'string' && parameters.updateDraftIfNeeded,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35338,12 +36076,13 @@ class WorkflowSchemes {
     }
     getWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/workflow`,
+                url: `/rest/api/2/workflowscheme/${id}/workflow`,
                 method: 'GET',
                 params: {
-                    workflowName: parameters.workflowName,
-                    returnDraftIfExists: parameters.returnDraftIfExists,
+                    workflowName: typeof parameters !== 'string' && parameters.workflowName,
+                    returnDraftIfExists: typeof parameters !== 'string' && parameters.returnDraftIfExists,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35369,12 +36108,13 @@ class WorkflowSchemes {
     }
     deleteWorkflowMapping(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/2/workflowscheme/${parameters.id}/workflow`,
+                url: `/rest/api/2/workflowscheme/${id}/workflow`,
                 method: 'DELETE',
                 params: {
-                    workflowName: parameters.workflowName,
-                    updateDraftIfNeeded: parameters.updateDraftIfNeeded,
+                    workflowName: typeof parameters !== 'string' && parameters.workflowName,
+                    updateDraftIfNeeded: typeof parameters !== 'string' && parameters.updateDraftIfNeeded,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35393,7 +36133,7 @@ exports.WorkflowSchemes = WorkflowSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowStatusCategories = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowStatusCategories {
     constructor(client) {
         this.client = client;
@@ -35409,8 +36149,9 @@ class WorkflowStatusCategories {
     }
     getStatusCategory(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const idOrKey = typeof parameters === 'string' ? parameters : parameters.idOrKey;
             const config = {
-                url: `/rest/api/2/statuscategory/${parameters.idOrKey}`,
+                url: `/rest/api/2/statuscategory/${idOrKey}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35429,7 +36170,7 @@ exports.WorkflowStatusCategories = WorkflowStatusCategories;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowStatuses = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowStatuses {
     constructor(client) {
         this.client = client;
@@ -35445,8 +36186,9 @@ class WorkflowStatuses {
     }
     getStatus(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const idOrName = typeof parameters === 'string' ? parameters : parameters.idOrName;
             const config = {
-                url: `/rest/api/2/status/${parameters.idOrName}`,
+                url: `/rest/api/2/status/${idOrName}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35465,7 +36207,7 @@ exports.WorkflowStatuses = WorkflowStatuses;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowTransitionProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowTransitionProperties {
     constructor(client) {
         this.client = client;
@@ -35542,7 +36284,7 @@ exports.WorkflowTransitionProperties = WorkflowTransitionProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowTransitionRules = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowTransitionRules {
     constructor(client) {
         this.client = client;
@@ -35572,7 +36314,7 @@ class WorkflowTransitionRules {
                 url: '/rest/api/2/workflow/rule/config',
                 method: 'PUT',
                 data: {
-                    workflows: parameters === null || parameters === void 0 ? void 0 : parameters.workflows,
+                    workflows: parameters.workflows,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35603,7 +36345,7 @@ exports.WorkflowTransitionRules = WorkflowTransitionRules;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Workflows = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const paramSerializer_1 = __nccwpck_require__(52517);
 class Workflows {
     constructor(client) {
@@ -35627,10 +36369,10 @@ class Workflows {
                 url: '/rest/api/2/workflow',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    transitions: parameters === null || parameters === void 0 ? void 0 : parameters.transitions,
-                    statuses: parameters === null || parameters === void 0 ? void 0 : parameters.statuses,
+                    name: parameters.name,
+                    description: parameters.description,
+                    transitions: parameters.transitions,
+                    statuses: parameters.statuses,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35656,8 +36398,9 @@ class Workflows {
     }
     deleteInactiveWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const entityId = typeof parameters === 'string' ? parameters : parameters.entityId;
             const config = {
-                url: `/rest/api/2/workflow/${parameters.entityId}`,
+                url: `/rest/api/2/workflow/${entityId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -35676,7 +36419,7 @@ exports.Workflows = Workflows;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AnnouncementBanner = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AnnouncementBanner {
     constructor(client) {
         this.client = client;
@@ -35696,9 +36439,9 @@ class AnnouncementBanner {
                 url: '/rest/api/3/announcementBanner',
                 method: 'PUT',
                 data: {
-                    message: parameters === null || parameters === void 0 ? void 0 : parameters.message,
                     isDismissible: parameters === null || parameters === void 0 ? void 0 : parameters.isDismissible,
                     isEnabled: parameters === null || parameters === void 0 ? void 0 : parameters.isEnabled,
+                    message: parameters === null || parameters === void 0 ? void 0 : parameters.message,
                     visibility: parameters === null || parameters === void 0 ? void 0 : parameters.visibility,
                 },
             };
@@ -35718,7 +36461,7 @@ exports.AnnouncementBanner = AnnouncementBanner;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppMigration = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AppMigration {
     constructor(client) {
         this.client = client;
@@ -35729,8 +36472,8 @@ class AppMigration {
                 url: '/rest/atlassian-connect/1/migration/field',
                 method: 'PUT',
                 headers: {
-                    'Atlassian-Transfer-Id': parameters.transferId,
                     'Atlassian-Account-Id': parameters.accountId,
+                    'Atlassian-Transfer-Id': parameters.transferId,
                 },
                 data: {
                     updateValueList: parameters.updateValueList,
@@ -35746,9 +36489,9 @@ class AppMigration {
                 url: `/rest/atlassian-connect/1/migration/properties/${parameters.entityType}`,
                 method: 'PUT',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Atlassian-Transfer-Id': parameters.transferId,
                     'Atlassian-Account-Id': parameters.accountId,
+                    'Atlassian-Transfer-Id': parameters.transferId,
+                    'Content-Type': 'application/json',
                 },
                 data: (_a = parameters.body) !== null && _a !== void 0 ? _a : parameters.entities,
             };
@@ -35764,9 +36507,9 @@ class AppMigration {
                     'Atlassian-Transfer-Id': parameters.transferId,
                 },
                 data: {
-                    workflowEntityId: parameters.workflowEntityId,
-                    ruleIds: parameters.ruleIds,
                     expand: parameters.expand,
+                    ruleIds: parameters.ruleIds,
+                    workflowEntityId: parameters.workflowEntityId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -35785,15 +36528,16 @@ exports.AppMigration = AppMigration;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AppProperties {
     constructor(client) {
         this.client = client;
     }
     getAddonProperties(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const addonKey = typeof parameters === 'string' ? parameters : parameters.addonKey;
             const config = {
-                url: `/rest/atlassian-connect/1/addons/${parameters.addonKey}/properties`,
+                url: `/rest/atlassian-connect/1/addons/${addonKey}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35813,6 +36557,7 @@ class AppProperties {
             const config = {
                 url: `/rest/atlassian-connect/1/addons/${parameters.addonKey}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.property,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -35839,7 +36584,7 @@ exports.AppProperties = AppProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ApplicationRoles = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ApplicationRoles {
     constructor(client) {
         this.client = client;
@@ -35855,8 +36600,9 @@ class ApplicationRoles {
     }
     getApplicationRole(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const key = typeof parameters === 'string' ? parameters : parameters.key;
             const config = {
-                url: `/rest/api/3/applicationrole/${parameters.key}`,
+                url: `/rest/api/3/applicationrole/${key}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35875,7 +36621,7 @@ exports.ApplicationRoles = ApplicationRoles;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AuditRecords = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class AuditRecords {
     constructor(client) {
         this.client = client;
@@ -35909,15 +36655,16 @@ exports.AuditRecords = AuditRecords;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Avatars = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Avatars {
     constructor(client) {
         this.client = client;
     }
     getAllSystemAvatars(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const type = typeof parameters === 'string' ? parameters : parameters.type;
             const config = {
-                url: `/rest/api/3/avatar/${parameters.type}/system`,
+                url: `/rest/api/3/avatar/${type}/system`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -35957,12 +36704,13 @@ class Avatars {
     }
     getAvatarImageByType(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const type = typeof parameters === 'string' ? parameters : parameters.type;
             const config = {
-                url: `/rest/api/3/universal_avatar/view/type/${parameters.type}`,
+                url: `/rest/api/3/universal_avatar/view/type/${type}`,
                 method: 'GET',
                 params: {
-                    size: parameters.size,
-                    format: parameters.format,
+                    size: typeof parameters !== 'string' && parameters.size,
+                    format: typeof parameters !== 'string' && parameters.format,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36006,7 +36754,7 @@ exports.Avatars = Avatars;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(13156), exports);
 //# sourceMappingURL=index.js.map
 
@@ -36072,6 +36820,7 @@ class Version3Client extends clients_1.BaseClient {
         this.jiraSettings = new __1.JiraSettings(this);
         this.jql = new __1.JQL(this);
         this.labels = new __1.Labels(this);
+        this.licenseMetrics = new __1.LicenseMetrics(this);
         this.myself = new __1.Myself(this);
         this.permissions = new __1.Permissions(this);
         this.permissionSchemes = new __1.PermissionSchemes(this);
@@ -36123,7 +36872,7 @@ exports.Version3Client = Version3Client;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Dashboards = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Dashboards {
     constructor(client) {
         this.client = client;
@@ -36190,13 +36939,14 @@ class Dashboards {
     }
     getAllGadgets(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const dashboardId = typeof parameters === 'string' ? parameters : parameters.dashboardId;
             const config = {
-                url: `/rest/api/3/dashboard/${parameters.dashboardId}/gadget`,
+                url: `/rest/api/3/dashboard/${dashboardId}/gadget`,
                 method: 'GET',
                 params: {
-                    moduleKey: parameters.moduleKey,
-                    uri: parameters.uri,
-                    gadgetId: parameters.gadgetId,
+                    moduleKey: typeof parameters !== 'string' && parameters.moduleKey,
+                    uri: typeof parameters !== 'string' && parameters.uri,
+                    gadgetId: typeof parameters !== 'string' && parameters.gadgetId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36265,6 +37015,10 @@ class Dashboards {
             const config = {
                 url: `/rest/api/3/dashboard/${parameters.dashboardId}/items/${parameters.itemId}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                data: parameters.body,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -36280,8 +37034,9 @@ class Dashboards {
     }
     getDashboard(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/dashboard/${parameters.id}`,
+                url: `/rest/api/3/dashboard/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -36304,8 +37059,9 @@ class Dashboards {
     }
     deleteDashboard(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/dashboard/${parameters.id}`,
+                url: `/rest/api/3/dashboard/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -36339,7 +37095,7 @@ exports.Dashboards = Dashboards;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DynamicModules = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class DynamicModules {
     constructor(client) {
         this.client = client;
@@ -36390,7 +37146,7 @@ exports.DynamicModules = DynamicModules;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.FilterSharing = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class FilterSharing {
     constructor(client) {
         this.client = client;
@@ -36406,11 +37162,12 @@ class FilterSharing {
     }
     setDefaultShareScope(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const scope = typeof parameters === 'string' ? parameters : parameters.scope;
             const config = {
                 url: '/rest/api/3/filter/defaultShareScope',
                 method: 'PUT',
                 data: {
-                    scope: parameters === null || parameters === void 0 ? void 0 : parameters.scope,
+                    scope,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36418,8 +37175,9 @@ class FilterSharing {
     }
     getSharePermissions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}/permission`,
+                url: `/rest/api/3/filter/${id}/permission`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -36474,7 +37232,7 @@ exports.FilterSharing = FilterSharing;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Filters = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Filters {
     constructor(client) {
         this.client = client;
@@ -36570,12 +37328,13 @@ class Filters {
     }
     getFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}`,
+                url: `/rest/api/3/filter/${id}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
-                    overrideSharePermissions: parameters.overrideSharePermissions,
+                    expand: typeof parameters !== 'string' && parameters.expand,
+                    overrideSharePermissions: typeof parameters !== 'string' && parameters.overrideSharePermissions,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36603,8 +37362,9 @@ class Filters {
     }
     deleteFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}`,
+                url: `/rest/api/3/filter/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -36612,8 +37372,9 @@ class Filters {
     }
     getColumns(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}/columns`,
+                url: `/rest/api/3/filter/${id}/columns`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -36624,14 +37385,16 @@ class Filters {
             const config = {
                 url: `/rest/api/3/filter/${parameters.id}/columns`,
                 method: 'PUT',
+                data: parameters.columns,
             };
             return this.client.sendRequest(config, callback);
         });
     }
     resetColumns(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}/columns`,
+                url: `/rest/api/3/filter/${id}/columns`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -36639,11 +37402,12 @@ class Filters {
     }
     setFavouriteForFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}/favourite`,
+                url: `/rest/api/3/filter/${id}/favourite`,
                 method: 'PUT',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36651,11 +37415,12 @@ class Filters {
     }
     deleteFavouriteForFilter(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/filter/${parameters.id}/favourite`,
+                url: `/rest/api/3/filter/${id}/favourite`,
                 method: 'DELETE',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36686,7 +37451,7 @@ exports.Filters = Filters;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.GroupAndUserPicker = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class GroupAndUserPicker {
     constructor(client) {
         this.client = client;
@@ -36724,7 +37489,7 @@ exports.GroupAndUserPicker = GroupAndUserPicker;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Groups = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Groups {
     constructor(client) {
         this.client = client;
@@ -36778,6 +37543,8 @@ class Groups {
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
                     groupId: parameters === null || parameters === void 0 ? void 0 : parameters.groupId,
                     groupName: parameters === null || parameters === void 0 ? void 0 : parameters.groupName,
+                    accessType: parameters === null || parameters === void 0 ? void 0 : parameters.accessType,
+                    applicationKey: parameters === null || parameters === void 0 ? void 0 : parameters.applicationKey,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -36838,10 +37605,11 @@ class Groups {
                 method: 'GET',
                 params: {
                     accountId: parameters === null || parameters === void 0 ? void 0 : parameters.accountId,
-                    query: parameters === null || parameters === void 0 ? void 0 : parameters.query,
+                    caseInsensitive: parameters === null || parameters === void 0 ? void 0 : parameters.caseInsensitive,
                     exclude: parameters === null || parameters === void 0 ? void 0 : parameters.exclude,
                     excludeId: parameters === null || parameters === void 0 ? void 0 : parameters.excludeId,
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    query: parameters === null || parameters === void 0 ? void 0 : parameters.query,
                     userName: parameters === null || parameters === void 0 ? void 0 : parameters.userName,
                 },
             };
@@ -36861,7 +37629,7 @@ exports.Groups = Groups;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Version3Parameters = exports.Version3Models = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(90966), exports);
 tslib_1.__exportStar(__nccwpck_require__(39853), exports);
 tslib_1.__exportStar(__nccwpck_require__(10553), exports);
@@ -36910,6 +37678,7 @@ tslib_1.__exportStar(__nccwpck_require__(95698), exports);
 tslib_1.__exportStar(__nccwpck_require__(329), exports);
 tslib_1.__exportStar(__nccwpck_require__(44313), exports);
 tslib_1.__exportStar(__nccwpck_require__(67834), exports);
+tslib_1.__exportStar(__nccwpck_require__(75584), exports);
 tslib_1.__exportStar(__nccwpck_require__(37919), exports);
 tslib_1.__exportStar(__nccwpck_require__(89595), exports);
 tslib_1.__exportStar(__nccwpck_require__(94526), exports);
@@ -36961,7 +37730,7 @@ exports.Version3Parameters = __nccwpck_require__(42988);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.InstanceInformation = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class InstanceInformation {
     constructor(client) {
         this.client = client;
@@ -36988,7 +37757,7 @@ exports.InstanceInformation = InstanceInformation;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueAdjustmentsApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueAdjustmentsApps {
     constructor(client) {
         this.client = client;
@@ -37059,7 +37828,7 @@ exports.IssueAdjustmentsApps = IssueAdjustmentsApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueAttachments = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const FormData = __nccwpck_require__(64334);
 class IssueAttachments {
     constructor(client) {
@@ -37067,11 +37836,12 @@ class IssueAttachments {
     }
     getAttachmentContent(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/attachment/content/${parameters.id}`,
+                url: `/rest/api/3/attachment/content/${id}`,
                 method: 'GET',
                 params: {
-                    redirect: parameters.redirect,
+                    redirect: typeof parameters !== 'string' && parameters.redirect,
                 },
                 responseType: 'arraybuffer',
             };
@@ -37089,14 +37859,15 @@ class IssueAttachments {
     }
     getAttachmentThumbnail(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/attachment/thumbnail/${parameters.id}`,
+                url: `/rest/api/3/attachment/thumbnail/${id}`,
                 method: 'GET',
                 params: {
-                    redirect: parameters.redirect,
-                    fallbackToDefault: parameters.fallbackToDefault,
-                    width: parameters.width,
-                    height: parameters.height,
+                    redirect: typeof parameters !== 'string' && parameters.redirect,
+                    fallbackToDefault: typeof parameters !== 'string' && parameters.fallbackToDefault,
+                    width: typeof parameters !== 'string' && parameters.width,
+                    height: typeof parameters !== 'string' && parameters.height,
                 },
                 responseType: 'arraybuffer',
             };
@@ -37105,8 +37876,9 @@ class IssueAttachments {
     }
     getAttachment(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/attachment/${parameters.id}`,
+                url: `/rest/api/3/attachment/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -37114,8 +37886,9 @@ class IssueAttachments {
     }
     removeAttachment(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/attachment/${parameters.id}`,
+                url: `/rest/api/3/attachment/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -37123,8 +37896,9 @@ class IssueAttachments {
     }
     expandAttachmentForHumans(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/attachment/${parameters.id}/expand/human`,
+                url: `/rest/api/3/attachment/${id}/expand/human`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -37132,8 +37906,9 @@ class IssueAttachments {
     }
     expandAttachmentForMachines(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/attachment/${parameters.id}/expand/raw`,
+                url: `/rest/api/3/attachment/${id}/expand/raw`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -37169,15 +37944,16 @@ exports.IssueAttachments = IssueAttachments;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCommentProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCommentProperties {
     constructor(client) {
         this.client = client;
     }
     getCommentPropertyKeys(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const commentId = typeof parameters === 'string' ? parameters : parameters.commentId;
             const config = {
-                url: `/rest/api/3/comment/${parameters.commentId}/properties`,
+                url: `/rest/api/3/comment/${commentId}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -37197,6 +37973,7 @@ class IssueCommentProperties {
             const config = {
                 url: `/rest/api/3/comment/${parameters.commentId}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.property,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -37223,7 +38000,7 @@ exports.IssueCommentProperties = IssueCommentProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueComments = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueComments {
     constructor(client) {
         this.client = client;
@@ -37234,10 +38011,10 @@ class IssueComments {
                 url: '/rest/api/3/comment/list',
                 method: 'POST',
                 params: {
-                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
+                    expand: parameters.expand,
                 },
                 data: {
-                    ids: parameters === null || parameters === void 0 ? void 0 : parameters.ids,
+                    ids: parameters.ids,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37245,14 +38022,15 @@ class IssueComments {
     }
     getComments(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const issueIdOrKey = typeof parameters === 'string' ? parameters : parameters.issueIdOrKey;
             const config = {
-                url: `/rest/api/3/issue/${parameters.issueIdOrKey}/comment`,
+                url: `/rest/api/3/issue/${issueIdOrKey}/comment`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    orderBy: parameters.orderBy,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    orderBy: typeof parameters !== 'string' && parameters.orderBy,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37260,6 +38038,16 @@ class IssueComments {
     }
     addComment(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const body = typeof parameters.body === 'string' ? {
+                type: 'doc',
+                version: 1,
+                content: [
+                    {
+                        type: 'paragraph',
+                        content: [{ type: 'text', text: parameters.body }],
+                    },
+                ],
+            } : parameters.body;
             const config = {
                 url: `/rest/api/3/issue/${parameters.issueIdOrKey}/comment`,
                 method: 'POST',
@@ -37270,7 +38058,7 @@ class IssueComments {
                     self: parameters.self,
                     id: parameters.id,
                     author: parameters.author,
-                    body: parameters.body,
+                    body,
                     renderedBody: parameters.renderedBody,
                     updateAuthor: parameters.updateAuthor,
                     created: parameters.created,
@@ -37298,6 +38086,7 @@ class IssueComments {
     }
     updateComment(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            // todo same above
             const config = {
                 url: `/rest/api/3/issue/${parameters.issueIdOrKey}/comment/${parameters.id}`,
                 method: 'PUT',
@@ -37337,25 +38126,26 @@ exports.IssueComments = IssueComments;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldConfigurationApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldConfigurationApps {
     constructor(client) {
         this.client = client;
     }
     getCustomFieldConfiguration(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldIdOrKey = typeof parameters === 'string' ? parameters : parameters.fieldIdOrKey;
             const config = {
-                url: `/rest/api/3/app/field/${parameters.fieldIdOrKey}/context/configuration`,
+                url: `/rest/api/3/app/field/${fieldIdOrKey}/context/configuration`,
                 method: 'GET',
                 params: {
-                    id: parameters.id,
-                    contextId: parameters.contextId,
-                    fieldContextId: parameters.fieldContextId,
-                    issueId: parameters.issueId,
-                    projectKeyOrId: parameters.projectKeyOrId,
-                    issueTypeId: parameters.issueTypeId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    id: typeof parameters !== 'string' && parameters.id,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    fieldContextId: typeof parameters !== 'string' && parameters.fieldContextId,
+                    issueId: typeof parameters !== 'string' && parameters.issueId,
+                    projectKeyOrId: typeof parameters !== 'string' && parameters.projectKeyOrId,
+                    issueTypeId: typeof parameters !== 'string' && parameters.issueTypeId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37386,22 +38176,23 @@ exports.IssueCustomFieldConfigurationApps = IssueCustomFieldConfigurationApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldContexts = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldContexts {
     constructor(client) {
         this.client = client;
     }
     getContextsForField(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldId}/context`,
+                url: `/rest/api/3/field/${fieldId}/context`,
                 method: 'GET',
                 params: {
-                    isAnyIssueType: parameters.isAnyIssueType,
-                    isGlobalContext: parameters.isGlobalContext,
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    isAnyIssueType: typeof parameters !== 'string' && parameters.isAnyIssueType,
+                    isGlobalContext: typeof parameters !== 'string' && parameters.isGlobalContext,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37425,13 +38216,14 @@ class IssueCustomFieldContexts {
     }
     getDefaultValues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldId}/context/defaultValue`,
+                url: `/rest/api/3/field/${fieldId}/context/defaultValue`,
                 method: 'GET',
                 params: {
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37451,13 +38243,14 @@ class IssueCustomFieldContexts {
     }
     getIssueTypeMappingsForContexts(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldId}/context/issuetypemapping`,
+                url: `/rest/api/3/field/${fieldId}/context/issuetypemapping`,
                 method: 'GET',
                 params: {
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37481,13 +38274,14 @@ class IssueCustomFieldContexts {
     }
     getProjectContextMapping(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldId}/context/projectmapping`,
+                url: `/rest/api/3/field/${fieldId}/context/projectmapping`,
                 method: 'GET',
                 params: {
-                    contextId: parameters.contextId,
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    contextId: typeof parameters !== 'string' && parameters.contextId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37576,19 +38370,20 @@ exports.IssueCustomFieldContexts = IssueCustomFieldContexts;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldOptions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldOptions {
     constructor(client) {
         this.client = client;
     }
     getOptionsForField(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/customField/${parameters.fieldId}/option`,
+                url: `/rest/api/3/customField/${fieldId}/option`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37620,8 +38415,9 @@ class IssueCustomFieldOptions {
     }
     getCustomFieldOption(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/customFieldOption/${parameters.id}`,
+                url: `/rest/api/3/customFieldOption/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -37702,19 +38498,20 @@ exports.IssueCustomFieldOptions = IssueCustomFieldOptions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldOptionsApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldOptionsApps {
     constructor(client) {
         this.client = client;
     }
     getAllIssueFieldOptions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldKey = typeof parameters === 'string' ? parameters : parameters.fieldKey;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldKey}/option`,
+                url: `/rest/api/3/field/${fieldKey}/option`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37736,13 +38533,14 @@ class IssueCustomFieldOptionsApps {
     }
     getSelectableIssueFieldOptions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldKey = typeof parameters === 'string' ? parameters : parameters.fieldKey;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldKey}/option/suggestions/edit`,
+                url: `/rest/api/3/field/${fieldKey}/option/suggestions/edit`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    projectId: parameters.projectId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    projectId: typeof parameters !== 'string' && parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37750,13 +38548,14 @@ class IssueCustomFieldOptionsApps {
     }
     getVisibleIssueFieldOptions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldKey = typeof parameters === 'string' ? parameters : parameters.fieldKey;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldKey}/option/suggestions/search`,
+                url: `/rest/api/3/field/${fieldKey}/option/suggestions/search`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    projectId: parameters.projectId,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    projectId: typeof parameters !== 'string' && parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37823,7 +38622,7 @@ exports.IssueCustomFieldOptionsApps = IssueCustomFieldOptionsApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueCustomFieldValuesApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueCustomFieldValuesApps {
     constructor(client) {
         this.client = client;
@@ -37834,10 +38633,10 @@ class IssueCustomFieldValuesApps {
                 url: '/rest/api/3/app/field/value',
                 method: 'POST',
                 params: {
-                    generateChangelog: parameters === null || parameters === void 0 ? void 0 : parameters.generateChangelog,
+                    generateChangelog: parameters.generateChangelog,
                 },
                 data: {
-                    updates: parameters === null || parameters === void 0 ? void 0 : parameters.updates,
+                    updates: parameters.updates,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -37871,7 +38670,7 @@ exports.IssueCustomFieldValuesApps = IssueCustomFieldValuesApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueFieldConfigurations = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueFieldConfigurations {
     constructor(client) {
         this.client = client;
@@ -38079,7 +38878,7 @@ exports.IssueFieldConfigurations = IssueFieldConfigurations;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueFields = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueFields {
     constructor(client) {
         this.client = client;
@@ -38136,6 +38935,7 @@ class IssueFields {
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
                     id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
                     query: parameters === null || parameters === void 0 ? void 0 : parameters.query,
+                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
                     orderBy: parameters === null || parameters === void 0 ? void 0 : parameters.orderBy,
                 },
             };
@@ -38209,7 +39009,7 @@ exports.IssueFields = IssueFields;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueLinkTypes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueLinkTypes {
     constructor(client) {
         this.client = client;
@@ -38286,7 +39086,7 @@ exports.IssueLinkTypes = IssueLinkTypes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueLinks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueLinks {
     constructor(client) {
         this.client = client;
@@ -38337,7 +39137,7 @@ exports.IssueLinks = IssueLinks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueNavigatorSettings = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueNavigatorSettings {
     constructor(client) {
         this.client = client;
@@ -38373,7 +39173,7 @@ exports.IssueNavigatorSettings = IssueNavigatorSettings;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueNotificationSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueNotificationSchemes {
     constructor(client) {
         this.client = client;
@@ -38386,7 +39186,39 @@ class IssueNotificationSchemes {
                 params: {
                     startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
                     maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
+                    onlyDefault: parameters === null || parameters === void 0 ? void 0 : parameters.onlyDefault,
                     expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    createNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/notificationscheme',
+                method: 'POST',
+                data: {
+                    description: parameters.description,
+                    name: parameters.name,
+                    notificationSchemeEvents: parameters.notificationSchemeEvents,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getNotificationSchemeToProjectMappings(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/notificationscheme/project',
+                method: 'GET',
+                params: {
+                    startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
+                    maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    notificationSchemeId: parameters === null || parameters === void 0 ? void 0 : parameters.notificationSchemeId,
+                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -38394,12 +39226,56 @@ class IssueNotificationSchemes {
     }
     getNotificationScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/notificationscheme/${parameters.id}`,
+                url: `/rest/api/3/notificationscheme/${id}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    updateNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/notificationscheme/${parameters.id}`,
+                method: 'PUT',
+                data: {
+                    description: parameters.description,
+                    name: parameters.name,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    addNotifications(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/notificationscheme/${parameters.id}/notification`,
+                method: 'PUT',
+                data: {
+                    notificationSchemeEvents: parameters.notificationSchemeEvents,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/notificationscheme/${parameters.notificationSchemeId}`,
+                method: 'DELETE',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    removeNotificationFromNotificationScheme(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/notificationscheme/${parameters.notificationSchemeId}/notification/${parameters.notificationId}`,
+                method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
         });
@@ -38417,7 +39293,7 @@ exports.IssueNotificationSchemes = IssueNotificationSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssuePriorities = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssuePriorities {
     constructor(client) {
         this.client = client;
@@ -38453,6 +39329,20 @@ class IssuePriorities {
                 method: 'PUT',
                 data: {
                     id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    movePriorities(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/priority/move',
+                method: 'PUT',
+                data: {
+                    ids: parameters === null || parameters === void 0 ? void 0 : parameters.ids,
+                    after: parameters === null || parameters === void 0 ? void 0 : parameters.after,
+                    position: parameters === null || parameters === void 0 ? void 0 : parameters.position,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -38497,6 +39387,19 @@ class IssuePriorities {
             return this.client.sendRequest(config, callback);
         });
     }
+    deletePriority(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/priority/${parameters.id}`,
+                method: 'DELETE',
+                params: {
+                    newPriority: parameters.newPriority,
+                    replaceWith: parameters.replaceWith,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
 }
 exports.IssuePriorities = IssuePriorities;
 //# sourceMappingURL=issuePriorities.js.map
@@ -38510,7 +39413,7 @@ exports.IssuePriorities = IssuePriorities;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueProperties {
     constructor(client) {
         this.client = client;
@@ -38616,7 +39519,7 @@ exports.IssueProperties = IssueProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueRemoteLinks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueRemoteLinks {
     constructor(client) {
         this.client = client;
@@ -38706,7 +39609,7 @@ exports.IssueRemoteLinks = IssueRemoteLinks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueResolutions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueResolutions {
     constructor(client) {
         this.client = client;
@@ -38720,11 +39623,84 @@ class IssueResolutions {
             return this.client.sendRequest(config, callback);
         });
     }
+    createResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/resolution',
+                method: 'POST',
+                data: parameters,
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    setDefaultResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/resolution/default',
+                method: 'PUT',
+                data: {
+                    id: parameters.id,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    moveResolutions(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/resolution/move',
+                method: 'PUT',
+                data: {
+                    ids: parameters.ids,
+                    after: parameters.after,
+                    position: parameters.position,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    searchResolutions(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/resolution/search',
+                method: 'GET',
+                params: {
+                    startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
+                    maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    onlyDefault: parameters === null || parameters === void 0 ? void 0 : parameters.onlyDefault,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
     getResolution(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
             const config = {
                 url: `/rest/api/3/resolution/${parameters.id}`,
                 method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    updateResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/resolution/${parameters.id}`,
+                method: 'PUT',
+                data: Object.assign(Object.assign({}, parameters), { name: parameters.name, description: parameters.description, id: undefined }),
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    deleteResolution(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/resolution/${parameters.id}`,
+                method: 'DELETE',
+                params: {
+                    replaceWith: parameters.replaceWith,
+                },
             };
             return this.client.sendRequest(config, callback);
         });
@@ -38742,7 +39718,7 @@ exports.IssueResolutions = IssueResolutions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueSearch = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueSearch {
     constructor(client) {
         this.client = client;
@@ -38828,7 +39804,7 @@ exports.IssueSearch = IssueSearch;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueSecurityLevel = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueSecurityLevel {
     constructor(client) {
         this.client = client;
@@ -38870,7 +39846,7 @@ exports.IssueSecurityLevel = IssueSecurityLevel;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueSecuritySchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueSecuritySchemes {
     constructor(client) {
         this.client = client;
@@ -38906,7 +39882,7 @@ exports.IssueSecuritySchemes = IssueSecuritySchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypeProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypeProperties {
     constructor(client) {
         this.client = client;
@@ -38960,7 +39936,7 @@ exports.IssueTypeProperties = IssueTypeProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypeSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypeSchemes {
     constructor(client) {
         this.client = client;
@@ -39109,7 +40085,7 @@ exports.IssueTypeSchemes = IssueTypeSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypeScreenSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypeScreenSchemes {
     constructor(client) {
         this.client = client;
@@ -39271,7 +40247,7 @@ exports.IssueTypeScreenSchemes = IssueTypeScreenSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueTypes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueTypes {
     constructor(client) {
         this.client = client;
@@ -39384,7 +40360,7 @@ exports.IssueTypes = IssueTypes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueVotes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueVotes {
     constructor(client) {
         this.client = client;
@@ -39432,7 +40408,7 @@ exports.IssueVotes = IssueVotes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueWatchers = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueWatchers {
     constructor(client) {
         this.client = client;
@@ -39497,7 +40473,7 @@ exports.IssueWatchers = IssueWatchers;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueWorklogProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueWorklogProperties {
     constructor(client) {
         this.client = client;
@@ -39551,7 +40527,7 @@ exports.IssueWorklogProperties = IssueWorklogProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IssueWorklogs = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class IssueWorklogs {
     constructor(client) {
         this.client = client;
@@ -39751,7 +40727,7 @@ exports.IssueWorklogs = IssueWorklogs;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Issues = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Issues {
     constructor(client) {
         this.client = client;
@@ -40040,7 +41016,7 @@ exports.Issues = Issues;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JQL = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class JQL {
     constructor(client) {
         this.client = client;
@@ -40121,6 +41097,34 @@ class JQL {
             return this.client.sendRequest(config, callback);
         });
     }
+    getPrecomputations(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/jql/function/computation',
+                method: 'GET',
+                params: {
+                    functionKey: parameters === null || parameters === void 0 ? void 0 : parameters.functionKey,
+                    startAt: parameters === null || parameters === void 0 ? void 0 : parameters.startAt,
+                    maxResults: parameters === null || parameters === void 0 ? void 0 : parameters.maxResults,
+                    orderBy: parameters === null || parameters === void 0 ? void 0 : parameters.orderBy,
+                    filter: parameters === null || parameters === void 0 ? void 0 : parameters.filter,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    updatePrecomputations(parameters, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/jql/function/computation',
+                method: 'POST',
+                data: {
+                    values: parameters.values,
+                },
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
 }
 exports.JQL = JQL;
 //# sourceMappingURL=jQL.js.map
@@ -40134,7 +41138,7 @@ exports.JQL = JQL;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JiraExpressions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class JiraExpressions {
     constructor(client) {
         this.client = client;
@@ -40184,7 +41188,7 @@ exports.JiraExpressions = JiraExpressions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JiraSettings = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class JiraSettings {
     constructor(client) {
         this.client = client;
@@ -40244,7 +41248,7 @@ exports.JiraSettings = JiraSettings;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Labels = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Labels {
     constructor(client) {
         this.client = client;
@@ -40265,6 +41269,42 @@ class Labels {
 }
 exports.Labels = Labels;
 //# sourceMappingURL=labels.js.map
+
+/***/ }),
+
+/***/ 75584:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.LicenseMetrics = void 0;
+const tslib_1 = __nccwpck_require__(4351);
+class LicenseMetrics {
+    constructor(client) {
+        this.client = client;
+    }
+    getApproximateLicenseCount(callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: '/rest/api/3/license/approximateLicenseCount',
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+    getApproximateApplicationLicenseCount(applicationKey, callback) {
+        return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const config = {
+                url: `/rest/api/3/license/approximateLicenseCount/product/${applicationKey}`,
+                method: 'GET',
+            };
+            return this.client.sendRequest(config, callback);
+        });
+    }
+}
+exports.LicenseMetrics = LicenseMetrics;
+//# sourceMappingURL=licenseMetrics.js.map
 
 /***/ }),
 
@@ -40305,6 +41345,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=addGroup.js.map
+
+/***/ }),
+
+/***/ 88588:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=addNotificationsDetails.js.map
 
 /***/ }),
 
@@ -40818,6 +41868,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 36554:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=containerForProjectFeatures.js.map
+
+/***/ }),
+
 /***/ 51738:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -40918,6 +41978,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 15605:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createNotificationSchemeDetails.js.map
+
+/***/ }),
+
 /***/ 84702:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -40935,6 +42005,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=createProjectDetails.js.map
+
+/***/ }),
+
+/***/ 93241:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createResolutionDetails.js.map
 
 /***/ }),
 
@@ -41914,7 +42994,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(18468), exports);
 tslib_1.__exportStar(__nccwpck_require__(12757), exports);
 tslib_1.__exportStar(__nccwpck_require__(99295), exports);
@@ -41928,7 +43008,17 @@ tslib_1.__exportStar(__nccwpck_require__(82079), exports);
 tslib_1.__exportStar(__nccwpck_require__(75744), exports);
 tslib_1.__exportStar(__nccwpck_require__(37492), exports);
 tslib_1.__exportStar(__nccwpck_require__(67438), exports);
+tslib_1.__exportStar(__nccwpck_require__(36554), exports);
+tslib_1.__exportStar(__nccwpck_require__(13026), exports);
+tslib_1.__exportStar(__nccwpck_require__(27657), exports);
+tslib_1.__exportStar(__nccwpck_require__(53309), exports);
+tslib_1.__exportStar(__nccwpck_require__(11917), exports);
 tslib_1.__exportStar(__nccwpck_require__(73037), exports);
+tslib_1.__exportStar(__nccwpck_require__(92710), exports);
+tslib_1.__exportStar(__nccwpck_require__(15605), exports);
+tslib_1.__exportStar(__nccwpck_require__(19423), exports);
+tslib_1.__exportStar(__nccwpck_require__(54569), exports);
+tslib_1.__exportStar(__nccwpck_require__(88588), exports);
 tslib_1.__exportStar(__nccwpck_require__(37271), exports);
 tslib_1.__exportStar(__nccwpck_require__(90947), exports);
 tslib_1.__exportStar(__nccwpck_require__(27066), exports);
@@ -41984,6 +43074,7 @@ tslib_1.__exportStar(__nccwpck_require__(31232), exports);
 tslib_1.__exportStar(__nccwpck_require__(18142), exports);
 tslib_1.__exportStar(__nccwpck_require__(84702), exports);
 tslib_1.__exportStar(__nccwpck_require__(71476), exports);
+tslib_1.__exportStar(__nccwpck_require__(93241), exports);
 tslib_1.__exportStar(__nccwpck_require__(26343), exports);
 tslib_1.__exportStar(__nccwpck_require__(96698), exports);
 tslib_1.__exportStar(__nccwpck_require__(77394), exports);
@@ -42238,6 +43329,7 @@ tslib_1.__exportStar(__nccwpck_require__(64080), exports);
 tslib_1.__exportStar(__nccwpck_require__(13266), exports);
 tslib_1.__exportStar(__nccwpck_require__(17007), exports);
 tslib_1.__exportStar(__nccwpck_require__(87763), exports);
+tslib_1.__exportStar(__nccwpck_require__(45631), exports);
 tslib_1.__exportStar(__nccwpck_require__(63098), exports);
 tslib_1.__exportStar(__nccwpck_require__(2427), exports);
 tslib_1.__exportStar(__nccwpck_require__(62062), exports);
@@ -42308,7 +43400,10 @@ tslib_1.__exportStar(__nccwpck_require__(94220), exports);
 tslib_1.__exportStar(__nccwpck_require__(28949), exports);
 tslib_1.__exportStar(__nccwpck_require__(85424), exports);
 tslib_1.__exportStar(__nccwpck_require__(65524), exports);
+tslib_1.__exportStar(__nccwpck_require__(28855), exports);
+tslib_1.__exportStar(__nccwpck_require__(98590), exports);
 tslib_1.__exportStar(__nccwpck_require__(38581), exports);
+tslib_1.__exportStar(__nccwpck_require__(51240), exports);
 tslib_1.__exportStar(__nccwpck_require__(89144), exports);
 tslib_1.__exportStar(__nccwpck_require__(79906), exports);
 tslib_1.__exportStar(__nccwpck_require__(33027), exports);
@@ -42335,6 +43430,7 @@ tslib_1.__exportStar(__nccwpck_require__(58838), exports);
 tslib_1.__exportStar(__nccwpck_require__(51430), exports);
 tslib_1.__exportStar(__nccwpck_require__(89417), exports);
 tslib_1.__exportStar(__nccwpck_require__(12929), exports);
+tslib_1.__exportStar(__nccwpck_require__(99234), exports);
 tslib_1.__exportStar(__nccwpck_require__(43515), exports);
 tslib_1.__exportStar(__nccwpck_require__(98767), exports);
 tslib_1.__exportStar(__nccwpck_require__(48628), exports);
@@ -42373,6 +43469,7 @@ tslib_1.__exportStar(__nccwpck_require__(19109), exports);
 tslib_1.__exportStar(__nccwpck_require__(19046), exports);
 tslib_1.__exportStar(__nccwpck_require__(5927), exports);
 tslib_1.__exportStar(__nccwpck_require__(99928), exports);
+tslib_1.__exportStar(__nccwpck_require__(74223), exports);
 tslib_1.__exportStar(__nccwpck_require__(47386), exports);
 tslib_1.__exportStar(__nccwpck_require__(41822), exports);
 tslib_1.__exportStar(__nccwpck_require__(89689), exports);
@@ -43191,6 +44288,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 11917:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=jqlFunctionPrecomputationPage.js.map
+
+/***/ }),
+
+/***/ 53309:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=jqlFunctionPrecomputationUpdateRequest.js.map
+
+/***/ }),
+
 /***/ 95189:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -43348,6 +44465,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=license.js.map
+
+/***/ }),
+
+/***/ 27657:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=licenseMetric.js.map
 
 /***/ }),
 
@@ -43551,6 +44678,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 19423:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=notificationSchemeAndProjectMappingPage.js.map
+
+/***/ }),
+
 /***/ 85086:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -43558,6 +44695,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=notificationSchemeEvent.js.map
+
+/***/ }),
+
+/***/ 92710:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=notificationSchemeId.js.map
 
 /***/ }),
 
@@ -44001,6 +45148,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 45631:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=pageResolution.js.map
+
+/***/ }),
+
 /***/ 63098:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -44310,6 +45467,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=projectCategory.js.map
+
+/***/ }),
+
+/***/ 13026:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=projectComponent.js.map
 
 /***/ }),
 
@@ -44723,6 +45890,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 28855:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=reorderIssuePriorities.js.map
+
+/***/ }),
+
+/***/ 98590:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=reorderIssueResolutionsRequest.js.map
+
+/***/ }),
+
 /***/ 38581:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -44730,6 +45917,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=resolution.js.map
+
+/***/ }),
+
+/***/ 51240:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=resolutionId.js.map
 
 /***/ }),
 
@@ -44990,6 +46187,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=setDefaultPriorityRequest.js.map
+
+/***/ }),
+
+/***/ 99234:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=setDefaultResolutionRequest.js.map
 
 /***/ }),
 
@@ -45343,6 +46550,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 54569:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateNotificationSchemeDetails.js.map
+
+/***/ }),
+
 /***/ 5927:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -45360,6 +46577,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=updateProjectDetails.js.map
+
+/***/ }),
+
+/***/ 74223:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateResolutionDetails.js.map
 
 /***/ }),
 
@@ -45920,7 +47147,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Myself = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Myself {
     constructor(client) {
         this.client = client;
@@ -46076,6 +47303,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=addIssueTypesToIssueTypeScheme.js.map
+
+/***/ }),
+
+/***/ 45026:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=addNotifications.js.map
 
 /***/ }),
 
@@ -46559,6 +47796,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 95142:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createNotificationScheme.js.map
+
+/***/ }),
+
 /***/ 45057:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -46636,6 +47883,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=createProjectRole.js.map
+
+/***/ }),
+
+/***/ 62710:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=createResolution.js.map
 
 /***/ }),
 
@@ -47039,6 +48296,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 72882:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteNotificationScheme.js.map
+
+/***/ }),
+
 /***/ 43455:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -47056,6 +48323,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=deletePermissionSchemeEntity.js.map
+
+/***/ }),
+
+/***/ 82572:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deletePriority.js.map
 
 /***/ }),
 
@@ -47136,6 +48413,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=deleteRemoteIssueLinkById.js.map
+
+/***/ }),
+
+/***/ 52319:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=deleteResolution.js.map
 
 /***/ }),
 
@@ -48574,6 +49861,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 56355:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=getNotificationSchemeToProjectMappings.js.map
+
+/***/ }),
+
 /***/ 9169:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -48641,6 +49938,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=getPermittedProjects.js.map
+
+/***/ }),
+
+/***/ 94276:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=getPrecomputations.js.map
 
 /***/ }),
 
@@ -49344,7 +50651,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 tslib_1.__exportStar(__nccwpck_require__(17191), exports);
 tslib_1.__exportStar(__nccwpck_require__(22782), exports);
 tslib_1.__exportStar(__nccwpck_require__(52652), exports);
@@ -49360,7 +50667,15 @@ tslib_1.__exportStar(__nccwpck_require__(33858), exports);
 tslib_1.__exportStar(__nccwpck_require__(17694), exports);
 tslib_1.__exportStar(__nccwpck_require__(16430), exports);
 tslib_1.__exportStar(__nccwpck_require__(36383), exports);
+tslib_1.__exportStar(__nccwpck_require__(71258), exports);
+tslib_1.__exportStar(__nccwpck_require__(94276), exports);
+tslib_1.__exportStar(__nccwpck_require__(95142), exports);
+tslib_1.__exportStar(__nccwpck_require__(56355), exports);
+tslib_1.__exportStar(__nccwpck_require__(26297), exports);
+tslib_1.__exportStar(__nccwpck_require__(45026), exports);
 tslib_1.__exportStar(__nccwpck_require__(37881), exports);
+tslib_1.__exportStar(__nccwpck_require__(72882), exports);
+tslib_1.__exportStar(__nccwpck_require__(96084), exports);
 tslib_1.__exportStar(__nccwpck_require__(9234), exports);
 tslib_1.__exportStar(__nccwpck_require__(33156), exports);
 tslib_1.__exportStar(__nccwpck_require__(39740), exports);
@@ -49411,6 +50726,7 @@ tslib_1.__exportStar(__nccwpck_require__(47854), exports);
 tslib_1.__exportStar(__nccwpck_require__(62583), exports);
 tslib_1.__exportStar(__nccwpck_require__(69357), exports);
 tslib_1.__exportStar(__nccwpck_require__(3087), exports);
+tslib_1.__exportStar(__nccwpck_require__(62710), exports);
 tslib_1.__exportStar(__nccwpck_require__(2678), exports);
 tslib_1.__exportStar(__nccwpck_require__(62376), exports);
 tslib_1.__exportStar(__nccwpck_require__(26901), exports);
@@ -49454,6 +50770,7 @@ tslib_1.__exportStar(__nccwpck_require__(97579), exports);
 tslib_1.__exportStar(__nccwpck_require__(60986), exports);
 tslib_1.__exportStar(__nccwpck_require__(43455), exports);
 tslib_1.__exportStar(__nccwpck_require__(78115), exports);
+tslib_1.__exportStar(__nccwpck_require__(82572), exports);
 tslib_1.__exportStar(__nccwpck_require__(87584), exports);
 tslib_1.__exportStar(__nccwpck_require__(33716), exports);
 tslib_1.__exportStar(__nccwpck_require__(1817), exports);
@@ -49462,6 +50779,7 @@ tslib_1.__exportStar(__nccwpck_require__(90684), exports);
 tslib_1.__exportStar(__nccwpck_require__(43599), exports);
 tslib_1.__exportStar(__nccwpck_require__(9465), exports);
 tslib_1.__exportStar(__nccwpck_require__(74168), exports);
+tslib_1.__exportStar(__nccwpck_require__(52319), exports);
 tslib_1.__exportStar(__nccwpck_require__(79077), exports);
 tslib_1.__exportStar(__nccwpck_require__(30059), exports);
 tslib_1.__exportStar(__nccwpck_require__(35653), exports);
@@ -49680,6 +50998,8 @@ tslib_1.__exportStar(__nccwpck_require__(23449), exports);
 tslib_1.__exportStar(__nccwpck_require__(45903), exports);
 tslib_1.__exportStar(__nccwpck_require__(45044), exports);
 tslib_1.__exportStar(__nccwpck_require__(75641), exports);
+tslib_1.__exportStar(__nccwpck_require__(35479), exports);
+tslib_1.__exportStar(__nccwpck_require__(98459), exports);
 tslib_1.__exportStar(__nccwpck_require__(16352), exports);
 tslib_1.__exportStar(__nccwpck_require__(84810), exports);
 tslib_1.__exportStar(__nccwpck_require__(11158), exports);
@@ -49722,6 +51042,7 @@ tslib_1.__exportStar(__nccwpck_require__(84486), exports);
 tslib_1.__exportStar(__nccwpck_require__(71466), exports);
 tslib_1.__exportStar(__nccwpck_require__(95582), exports);
 tslib_1.__exportStar(__nccwpck_require__(4412), exports);
+tslib_1.__exportStar(__nccwpck_require__(38248), exports);
 tslib_1.__exportStar(__nccwpck_require__(92780), exports);
 tslib_1.__exportStar(__nccwpck_require__(28042), exports);
 tslib_1.__exportStar(__nccwpck_require__(11338), exports);
@@ -49730,6 +51051,7 @@ tslib_1.__exportStar(__nccwpck_require__(17671), exports);
 tslib_1.__exportStar(__nccwpck_require__(39670), exports);
 tslib_1.__exportStar(__nccwpck_require__(60258), exports);
 tslib_1.__exportStar(__nccwpck_require__(9138), exports);
+tslib_1.__exportStar(__nccwpck_require__(50694), exports);
 tslib_1.__exportStar(__nccwpck_require__(87660), exports);
 tslib_1.__exportStar(__nccwpck_require__(90082), exports);
 tslib_1.__exportStar(__nccwpck_require__(3259), exports);
@@ -49786,6 +51108,7 @@ tslib_1.__exportStar(__nccwpck_require__(62082), exports);
 tslib_1.__exportStar(__nccwpck_require__(92629), exports);
 tslib_1.__exportStar(__nccwpck_require__(79048), exports);
 tslib_1.__exportStar(__nccwpck_require__(46049), exports);
+tslib_1.__exportStar(__nccwpck_require__(55104), exports);
 tslib_1.__exportStar(__nccwpck_require__(40891), exports);
 tslib_1.__exportStar(__nccwpck_require__(18026), exports);
 tslib_1.__exportStar(__nccwpck_require__(77503), exports);
@@ -49840,6 +51163,26 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=migrateQueries.js.map
+
+/***/ }),
+
+/***/ 35479:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=movePriorities.js.map
+
+/***/ }),
+
+/***/ 98459:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=moveResolutions.js.map
 
 /***/ }),
 
@@ -50040,6 +51383,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=removeModules.js.map
+
+/***/ }),
+
+/***/ 96084:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=removeNotificationFromNotificationScheme.js.map
 
 /***/ }),
 
@@ -50253,6 +51606,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 38248:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=searchResolutions.js.map
+
+/***/ }),
+
 /***/ 92780:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -50330,6 +51693,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=setDefaultPriority.js.map
+
+/***/ }),
+
+/***/ 50694:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=setDefaultResolution.js.map
 
 /***/ }),
 
@@ -50783,6 +52156,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 /***/ }),
 
+/***/ 26297:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateNotificationScheme.js.map
+
+/***/ }),
+
 /***/ 54038:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -50790,6 +52173,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=updatePermissionScheme.js.map
+
+/***/ }),
+
+/***/ 71258:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updatePrecomputations.js.map
 
 /***/ }),
 
@@ -50860,6 +52253,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 //# sourceMappingURL=updateRemoteIssueLink.js.map
+
+/***/ }),
+
+/***/ 55104:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=updateResolution.js.map
 
 /***/ }),
 
@@ -51000,7 +52403,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.PermissionSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class PermissionSchemes {
     constructor(client) {
         this.client = client;
@@ -51128,7 +52531,7 @@ exports.PermissionSchemes = PermissionSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Permissions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Permissions {
     constructor(client) {
         this.client = client;
@@ -51200,7 +52603,7 @@ exports.Permissions = Permissions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectAvatars = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectAvatars {
     constructor(client) {
         this.client = client;
@@ -51242,6 +52645,7 @@ class ProjectAvatars {
                     y: parameters.y,
                     size: parameters.size,
                 },
+                data: parameters.avatar,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -51268,7 +52672,7 @@ exports.ProjectAvatars = ProjectAvatars;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectCategories = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectCategories {
     constructor(client) {
         this.client = client;
@@ -51288,10 +52692,10 @@ class ProjectCategories {
                 url: '/rest/api/3/projectCategory',
                 method: 'POST',
                 data: {
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    description: parameters.description,
+                    id: parameters.id,
+                    name: parameters.name,
+                    self: parameters.self,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51341,7 +52745,7 @@ exports.ProjectCategories = ProjectCategories;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectComponents = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectComponents {
     constructor(client) {
         this.client = client;
@@ -51352,20 +52756,20 @@ class ProjectComponents {
                 url: '/rest/api/3/component',
                 method: 'POST',
                 data: {
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    lead: parameters === null || parameters === void 0 ? void 0 : parameters.lead,
-                    leadUserName: parameters === null || parameters === void 0 ? void 0 : parameters.leadUserName,
-                    leadAccountId: parameters === null || parameters === void 0 ? void 0 : parameters.leadAccountId,
-                    assigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.assigneeType,
                     assignee: parameters === null || parameters === void 0 ? void 0 : parameters.assignee,
-                    realAssigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.realAssigneeType,
-                    realAssignee: parameters === null || parameters === void 0 ? void 0 : parameters.realAssignee,
+                    assigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.assigneeType,
+                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
                     isAssigneeTypeValid: parameters === null || parameters === void 0 ? void 0 : parameters.isAssigneeTypeValid,
+                    lead: parameters === null || parameters === void 0 ? void 0 : parameters.lead,
+                    leadAccountId: parameters === null || parameters === void 0 ? void 0 : parameters.leadAccountId,
+                    leadUserName: parameters === null || parameters === void 0 ? void 0 : parameters.leadUserName,
+                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
                     project: parameters === null || parameters === void 0 ? void 0 : parameters.project,
                     projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
+                    realAssignee: parameters === null || parameters === void 0 ? void 0 : parameters.realAssignee,
+                    realAssigneeType: parameters === null || parameters === void 0 ? void 0 : parameters.realAssigneeType,
+                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51455,15 +52859,16 @@ exports.ProjectComponents = ProjectComponents;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectEmail = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectEmail {
     constructor(client) {
         this.client = client;
     }
     getProjectEmail(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectId = typeof parameters === 'string' ? parameters : parameters.projectId;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectId}/email`,
+                url: `/rest/api/3/project/${projectId}/email`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51495,15 +52900,16 @@ exports.ProjectEmail = ProjectEmail;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectFeatures = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectFeatures {
     constructor(client) {
         this.client = client;
     }
     getFeaturesForProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/features`,
+                url: `/rest/api/3/project/${projectIdOrKey}/features`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51534,18 +52940,19 @@ exports.ProjectFeatures = ProjectFeatures;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectKeyAndNameValidation = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectKeyAndNameValidation {
     constructor(client) {
         this.client = client;
     }
     validateProjectKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const key = typeof parameters === 'string' ? parameters : parameters === null || parameters === void 0 ? void 0 : parameters.key;
             const config = {
                 url: '/rest/api/3/projectvalidate/key',
                 method: 'GET',
                 params: {
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
+                    key,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51553,11 +52960,12 @@ class ProjectKeyAndNameValidation {
     }
     getValidProjectKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const key = typeof parameters === 'string' ? parameters : parameters === null || parameters === void 0 ? void 0 : parameters.key;
             const config = {
                 url: '/rest/api/3/projectvalidate/validProjectKey',
                 method: 'GET',
                 params: {
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
+                    key,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51565,11 +52973,12 @@ class ProjectKeyAndNameValidation {
     }
     getValidProjectName(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const name = typeof parameters === 'string' ? parameters : parameters.name;
             const config = {
                 url: '/rest/api/3/projectvalidate/validProjectName',
                 method: 'GET',
                 params: {
-                    name: parameters.name,
+                    name,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51588,15 +52997,16 @@ exports.ProjectKeyAndNameValidation = ProjectKeyAndNameValidation;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectPermissionSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectPermissionSchemes {
     constructor(client) {
         this.client = client;
     }
     getProjectIssueSecurityScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectKeyOrId}/issuesecuritylevelscheme`,
+                url: `/rest/api/3/project/${projectKeyOrId}/issuesecuritylevelscheme`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51604,11 +53014,12 @@ class ProjectPermissionSchemes {
     }
     getAssignedPermissionScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectKeyOrId}/permissionscheme`,
+                url: `/rest/api/3/project/${projectKeyOrId}/permissionscheme`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51631,8 +53042,9 @@ class ProjectPermissionSchemes {
     }
     getSecurityLevelsForProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectKeyOrId}/securitylevel`,
+                url: `/rest/api/3/project/${projectKeyOrId}/securitylevel`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51651,15 +53063,16 @@ exports.ProjectPermissionSchemes = ProjectPermissionSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectProperties {
     constructor(client) {
         this.client = client;
     }
     getProjectPropertyKeys(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/properties`,
+                url: `/rest/api/3/project/${projectIdOrKey}/properties`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51679,6 +53092,7 @@ class ProjectProperties {
             const config = {
                 url: `/rest/api/3/project/${parameters.projectIdOrKey}/properties/${parameters.propertyKey}`,
                 method: 'PUT',
+                data: parameters.property,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -51705,7 +53119,7 @@ exports.ProjectProperties = ProjectProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectRoleActors = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectRoleActors {
     constructor(client) {
         this.client = client;
@@ -51752,8 +53166,9 @@ class ProjectRoleActors {
     }
     getProjectRoleActorsForRole(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/role/${parameters.id}/actors`,
+                url: `/rest/api/3/role/${id}/actors`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51800,15 +53215,16 @@ exports.ProjectRoleActors = ProjectRoleActors;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectRoles = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectRoles {
     constructor(client) {
         this.client = client;
     }
     getProjectRoles(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/role`,
+                url: `/rest/api/3/project/${projectIdOrKey}/role`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51828,12 +53244,13 @@ class ProjectRoles {
     }
     getProjectRoleDetails(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/roledetails`,
+                url: `/rest/api/3/project/${projectIdOrKey}/roledetails`,
                 method: 'GET',
                 params: {
-                    currentMember: parameters.currentMember,
-                    excludeConnectAddons: parameters.excludeConnectAddons,
+                    currentMember: typeof parameters !== 'string' && parameters.currentMember,
+                    excludeConnectAddons: typeof parameters !== 'string' && parameters.excludeConnectAddons,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51854,8 +53271,8 @@ class ProjectRoles {
                 url: '/rest/api/3/role',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    name: parameters.name,
+                    description: parameters.description,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51863,8 +53280,9 @@ class ProjectRoles {
     }
     getProjectRoleById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/role/${parameters.id}`,
+                url: `/rest/api/3/role/${id}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51898,11 +53316,12 @@ class ProjectRoles {
     }
     deleteProjectRole(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/role/${parameters.id}`,
+                url: `/rest/api/3/role/${id}`,
                 method: 'DELETE',
                 params: {
-                    swap: parameters.swap,
+                    swap: typeof parameters !== 'string' && parameters.swap,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51921,7 +53340,7 @@ exports.ProjectRoles = ProjectRoles;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectTypes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectTypes {
     constructor(client) {
         this.client = client;
@@ -51946,8 +53365,9 @@ class ProjectTypes {
     }
     getProjectTypeByKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectTypeKey = typeof parameters === 'string' ? parameters : parameters.projectTypeKey;
             const config = {
-                url: `/rest/api/3/project/type/${parameters.projectTypeKey}`,
+                url: `/rest/api/3/project/type/${projectTypeKey}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51955,8 +53375,9 @@ class ProjectTypes {
     }
     getAccessibleProjectTypeByKey(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectTypeKey = typeof parameters === 'string' ? parameters : parameters.projectTypeKey;
             const config = {
-                url: `/rest/api/3/project/type/${parameters.projectTypeKey}/accessible`,
+                url: `/rest/api/3/project/type/${projectTypeKey}/accessible`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -51975,23 +53396,24 @@ exports.ProjectTypes = ProjectTypes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ProjectVersions = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ProjectVersions {
     constructor(client) {
         this.client = client;
     }
     getProjectVersionsPaginated(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/version`,
+                url: `/rest/api/3/project/${projectIdOrKey}/version`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    orderBy: parameters.orderBy,
-                    query: parameters.query,
-                    status: parameters.status,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    orderBy: typeof parameters !== 'string' && parameters.orderBy,
+                    query: typeof parameters !== 'string' && parameters.query,
+                    status: typeof parameters !== 'string' && parameters.status,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -51999,11 +53421,12 @@ class ProjectVersions {
     }
     getProjectVersions(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/versions`,
+                url: `/rest/api/3/project/${projectIdOrKey}/versions`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52015,23 +53438,23 @@ class ProjectVersions {
                 url: '/rest/api/3/version',
                 method: 'POST',
                 data: {
-                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    archived: parameters === null || parameters === void 0 ? void 0 : parameters.archived,
-                    released: parameters === null || parameters === void 0 ? void 0 : parameters.released,
-                    startDate: parameters === null || parameters === void 0 ? void 0 : parameters.startDate,
-                    releaseDate: parameters === null || parameters === void 0 ? void 0 : parameters.releaseDate,
-                    overdue: parameters === null || parameters === void 0 ? void 0 : parameters.overdue,
-                    userStartDate: parameters === null || parameters === void 0 ? void 0 : parameters.userStartDate,
-                    userReleaseDate: parameters === null || parameters === void 0 ? void 0 : parameters.userReleaseDate,
-                    project: parameters === null || parameters === void 0 ? void 0 : parameters.project,
-                    projectId: parameters === null || parameters === void 0 ? void 0 : parameters.projectId,
-                    moveUnfixedIssuesTo: parameters === null || parameters === void 0 ? void 0 : parameters.moveUnfixedIssuesTo,
-                    operations: parameters === null || parameters === void 0 ? void 0 : parameters.operations,
-                    issuesStatusForFixVersion: parameters === null || parameters === void 0 ? void 0 : parameters.issuesStatusForFixVersion,
+                    expand: parameters.expand,
+                    self: parameters.self,
+                    id: parameters.id,
+                    description: parameters.description,
+                    name: parameters.name,
+                    archived: parameters.archived,
+                    released: parameters.released,
+                    startDate: parameters.startDate,
+                    releaseDate: parameters.releaseDate,
+                    overdue: parameters.overdue,
+                    userStartDate: parameters.userStartDate,
+                    userReleaseDate: parameters.userReleaseDate,
+                    project: parameters.project,
+                    projectId: parameters.projectId,
+                    moveUnfixedIssuesTo: parameters.moveUnfixedIssuesTo,
+                    operations: parameters.operations,
+                    issuesStatusForFixVersion: parameters.issuesStatusForFixVersion,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52039,11 +53462,12 @@ class ProjectVersions {
     }
     getVersion(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/version/${parameters.id}`,
+                url: `/rest/api/3/version/${id}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52107,8 +53531,9 @@ class ProjectVersions {
     }
     getVersionRelatedIssues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/version/${parameters.id}/relatedIssueCounts`,
+                url: `/rest/api/3/version/${id}/relatedIssueCounts`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -52130,8 +53555,9 @@ class ProjectVersions {
     }
     getVersionUnresolvedIssues(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/version/${parameters.id}/unresolvedIssueCount`,
+                url: `/rest/api/3/version/${id}/unresolvedIssueCount`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -52150,7 +53576,7 @@ exports.ProjectVersions = ProjectVersions;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Projects = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Projects {
     constructor(client) {
         this.client = client;
@@ -52237,12 +53663,13 @@ class Projects {
     }
     getProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}`,
+                url: `/rest/api/3/project/${projectIdOrKey}`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
-                    properties: parameters.properties,
+                    expand: typeof parameters !== 'string' && parameters.expand,
+                    properties: typeof parameters !== 'string' && parameters.properties,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52278,11 +53705,12 @@ class Projects {
     }
     deleteProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}`,
+                url: `/rest/api/3/project/${projectIdOrKey}`,
                 method: 'DELETE',
                 params: {
-                    enableUndo: parameters.enableUndo,
+                    enableUndo: typeof parameters !== 'string' && parameters.enableUndo,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52290,8 +53718,9 @@ class Projects {
     }
     archiveProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/archive`,
+                url: `/rest/api/3/project/${projectIdOrKey}/archive`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -52299,8 +53728,9 @@ class Projects {
     }
     deleteProjectAsynchronously(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/delete`,
+                url: `/rest/api/3/project/${projectIdOrKey}/delete`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -52308,8 +53738,9 @@ class Projects {
     }
     restore(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/restore`,
+                url: `/rest/api/3/project/${projectIdOrKey}/restore`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -52317,8 +53748,9 @@ class Projects {
     }
     getAllStatuses(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectIdOrKey = typeof parameters === 'string' ? parameters : parameters.projectIdOrKey;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectIdOrKey}/statuses`,
+                url: `/rest/api/3/project/${projectIdOrKey}/statuses`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -52335,8 +53767,9 @@ class Projects {
     }
     getHierarchy(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectId = typeof parameters === 'string' ? parameters : parameters.projectId;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectId}/hierarchy`,
+                url: `/rest/api/3/project/${projectId}/hierarchy`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -52344,11 +53777,12 @@ class Projects {
     }
     getNotificationSchemeForProject(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const projectKeyOrId = typeof parameters === 'string' ? parameters : parameters.projectKeyOrId;
             const config = {
-                url: `/rest/api/3/project/${parameters.projectKeyOrId}/notificationscheme`,
+                url: `/rest/api/3/project/${projectKeyOrId}/notificationscheme`,
                 method: 'GET',
                 params: {
-                    expand: parameters.expand,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52367,7 +53801,7 @@ exports.Projects = Projects;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ScreenSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ScreenSchemes {
     constructor(client) {
         this.client = client;
@@ -52391,13 +53825,14 @@ class ScreenSchemes {
     }
     createScreenScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const name = typeof parameters === 'string' ? parameters : parameters.name;
             const config = {
                 url: '/rest/api/3/screenscheme',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    screens: parameters === null || parameters === void 0 ? void 0 : parameters.screens,
+                    name,
+                    description: typeof parameters !== 'string' && parameters.description,
+                    screens: typeof parameters !== 'string' && parameters.screens,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52419,8 +53854,9 @@ class ScreenSchemes {
     }
     deleteScreenScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenSchemeId = typeof parameters === 'string' ? parameters : parameters.screenSchemeId;
             const config = {
-                url: `/rest/api/3/screenscheme/${parameters.screenSchemeId}`,
+                url: `/rest/api/3/screenscheme/${screenSchemeId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -52439,7 +53875,7 @@ exports.ScreenSchemes = ScreenSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ScreenTabFields = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ScreenTabFields {
     constructor(client) {
         this.client = client;
@@ -52503,18 +53939,19 @@ exports.ScreenTabFields = ScreenTabFields;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ScreenTabs = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ScreenTabs {
     constructor(client) {
         this.client = client;
     }
     getAllScreenTabs(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenId = typeof parameters === 'string' ? parameters : parameters.screenId;
             const config = {
-                url: `/rest/api/3/screens/${parameters.screenId}/tabs`,
+                url: `/rest/api/3/screens/${screenId}/tabs`,
                 method: 'GET',
                 params: {
-                    projectKey: parameters.projectKey,
+                    projectKey: typeof parameters !== 'string' && parameters.projectKey,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52577,20 +54014,21 @@ exports.ScreenTabs = ScreenTabs;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Screens = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Screens {
     constructor(client) {
         this.client = client;
     }
     getScreensForField(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/field/${parameters.fieldId}/screens`,
+                url: `/rest/api/3/field/${fieldId}/screens`,
                 method: 'GET',
                 params: {
-                    startAt: parameters.startAt,
-                    maxResults: parameters.maxResults,
-                    expand: parameters.expand,
+                    startAt: typeof parameters !== 'string' && parameters.startAt,
+                    maxResults: typeof parameters !== 'string' && parameters.maxResults,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52619,8 +54057,8 @@ class Screens {
                 url: '/rest/api/3/screens',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
+                    name: parameters.name,
+                    description: parameters.description,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52628,8 +54066,9 @@ class Screens {
     }
     addFieldToDefaultScreen(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const fieldId = typeof parameters === 'string' ? parameters : parameters.fieldId;
             const config = {
-                url: `/rest/api/3/screens/addToDefault/${parameters.fieldId}`,
+                url: `/rest/api/3/screens/addToDefault/${fieldId}`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -52650,8 +54089,9 @@ class Screens {
     }
     deleteScreen(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenId = typeof parameters === 'string' ? parameters : parameters.screenId;
             const config = {
-                url: `/rest/api/3/screens/${parameters.screenId}`,
+                url: `/rest/api/3/screens/${screenId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -52659,8 +54099,9 @@ class Screens {
     }
     getAvailableScreenFields(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const screenId = typeof parameters === 'string' ? parameters : parameters.screenId;
             const config = {
-                url: `/rest/api/3/screens/${parameters.screenId}/availableFields`,
+                url: `/rest/api/3/screens/${screenId}/availableFields`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -52679,7 +54120,7 @@ exports.Screens = Screens;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ServerInfo = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class ServerInfo {
     constructor(client) {
         this.client = client;
@@ -52706,19 +54147,20 @@ exports.ServerInfo = ServerInfo;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Status = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Status {
     constructor(client) {
         this.client = client;
     }
     getStatusesById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
                 url: '/rest/api/3/statuses',
                 method: 'GET',
                 params: {
-                    expand: parameters === null || parameters === void 0 ? void 0 : parameters.expand,
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    id,
+                    expand: typeof parameters !== 'string' && parameters.expand,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52730,8 +54172,8 @@ class Status {
                 url: '/rest/api/3/statuses',
                 method: 'POST',
                 data: {
-                    statuses: parameters === null || parameters === void 0 ? void 0 : parameters.statuses,
-                    scope: parameters === null || parameters === void 0 ? void 0 : parameters.scope,
+                    statuses: parameters.statuses,
+                    scope: parameters.scope,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52743,7 +54185,7 @@ class Status {
                 url: '/rest/api/3/statuses',
                 method: 'PUT',
                 data: {
-                    statuses: parameters === null || parameters === void 0 ? void 0 : parameters.statuses,
+                    statuses: parameters.statuses,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52751,11 +54193,12 @@ class Status {
     }
     deleteStatusesById(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
                 url: '/rest/api/3/statuses',
                 method: 'DELETE',
                 params: {
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
+                    id,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52791,15 +54234,16 @@ exports.Status = Status;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Tasks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Tasks {
     constructor(client) {
         this.client = client;
     }
     getTask(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const taskId = typeof parameters === 'string' ? parameters : parameters.taskId;
             const config = {
-                url: `/rest/api/3/task/${parameters.taskId}`,
+                url: `/rest/api/3/task/${taskId}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -52807,8 +54251,9 @@ class Tasks {
     }
     cancelTask(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const taskId = typeof parameters === 'string' ? parameters : parameters.taskId;
             const config = {
-                url: `/rest/api/3/task/${parameters.taskId}/cancel`,
+                url: `/rest/api/3/task/${taskId}/cancel`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -52827,7 +54272,7 @@ exports.Tasks = Tasks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.TimeTracking = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class TimeTracking {
     constructor(client) {
         this.client = client;
@@ -52901,7 +54346,7 @@ exports.TimeTracking = TimeTracking;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.UIModificationsApps = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class UIModificationsApps {
     constructor(client) {
         this.client = client;
@@ -52926,10 +54371,10 @@ class UIModificationsApps {
                 url: '/rest/api/3/uiModifications',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    data: parameters === null || parameters === void 0 ? void 0 : parameters.data,
-                    contexts: parameters === null || parameters === void 0 ? void 0 : parameters.contexts,
+                    name: parameters.name,
+                    description: parameters.description,
+                    data: parameters.data,
+                    contexts: parameters.contexts,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -52952,8 +54397,9 @@ class UIModificationsApps {
     }
     deleteUiModification(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const uiModificationId = typeof parameters === 'string' ? parameters : parameters.uiModificationId;
             const config = {
-                url: `/rest/api/3/uiModifications/${parameters.uiModificationId}`,
+                url: `/rest/api/3/uiModifications/${uiModificationId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -52972,7 +54418,7 @@ exports.UIModificationsApps = UIModificationsApps;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.UserProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class UserProperties {
     constructor(client) {
         this.client = client;
@@ -53015,6 +54461,7 @@ class UserProperties {
                     userKey: parameters.userKey,
                     username: parameters.username,
                 },
+                data: parameters.propertyValue,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -53046,7 +54493,8 @@ exports.UserProperties = UserProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.UserSearch = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
+const paramSerializer_1 = __nccwpck_require__(52517);
 class UserSearch {
     constructor(client) {
         this.client = client;
@@ -53118,7 +54566,7 @@ class UserSearch {
                     maxResults: parameters.maxResults,
                     showAvatar: parameters.showAvatar,
                     exclude: parameters.exclude,
-                    excludeAccountIds: parameters.excludeAccountIds,
+                    excludeAccountIds: (0, paramSerializer_1.paramSerializer)('excludeAccountIds', parameters.excludeAccountIds),
                     avatarSize: parameters.avatarSize,
                     excludeConnectUsers: parameters.excludeConnectUsers,
                 },
@@ -53202,7 +54650,7 @@ exports.UserSearch = UserSearch;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Users = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const paramSerializer_1 = __nccwpck_require__(52517);
 class Users {
     constructor(client) {
@@ -53229,13 +54677,13 @@ class Users {
                 url: '/rest/api/3/user',
                 method: 'POST',
                 data: {
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    key: parameters === null || parameters === void 0 ? void 0 : parameters.key,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    password: parameters === null || parameters === void 0 ? void 0 : parameters.password,
-                    emailAddress: parameters === null || parameters === void 0 ? void 0 : parameters.emailAddress,
-                    displayName: parameters === null || parameters === void 0 ? void 0 : parameters.displayName,
-                    applicationKeys: parameters === null || parameters === void 0 ? void 0 : parameters.applicationKeys,
+                    self: parameters.self,
+                    key: parameters.key,
+                    name: parameters.name,
+                    password: parameters.password,
+                    emailAddress: parameters.emailAddress,
+                    displayName: parameters.displayName,
+                    applicationKeys: parameters.applicationKeys,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53307,6 +54755,7 @@ class Users {
                 params: {
                     accountId: parameters === null || parameters === void 0 ? void 0 : parameters.accountId,
                 },
+                data: parameters === null || parameters === void 0 ? void 0 : parameters.columns,
             };
             return this.client.sendRequest(config, callback);
         });
@@ -53317,8 +54766,8 @@ class Users {
                 url: '/rest/api/3/user/columns',
                 method: 'DELETE',
                 params: {
-                    accountId: parameters === null || parameters === void 0 ? void 0 : parameters.accountId,
-                    username: parameters === null || parameters === void 0 ? void 0 : parameters.username,
+                    accountId: parameters.accountId,
+                    username: parameters.username,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53326,11 +54775,12 @@ class Users {
     }
     getUserEmail(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const accountId = typeof parameters === 'string' ? parameters : parameters.accountId;
             const config = {
                 url: '/rest/api/3/user/email',
                 method: 'GET',
                 params: {
-                    accountId: parameters.accountId,
+                    accountId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53338,11 +54788,12 @@ class Users {
     }
     getUserEmailBulk(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const accountId = typeof parameters === 'string' ? parameters : parameters.accountId;
             const config = {
                 url: '/rest/api/3/user/email/bulk',
                 method: 'GET',
                 params: {
-                    accountId: parameters.accountId,
+                    accountId,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53401,7 +54852,7 @@ exports.Users = Users;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Webhooks = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class Webhooks {
     constructor(client) {
         this.client = client;
@@ -53425,8 +54876,8 @@ class Webhooks {
                 url: '/rest/api/3/webhook',
                 method: 'POST',
                 data: {
-                    webhooks: parameters === null || parameters === void 0 ? void 0 : parameters.webhooks,
-                    url: parameters === null || parameters === void 0 ? void 0 : parameters.url,
+                    webhooks: parameters.webhooks,
+                    url: parameters.url,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53438,7 +54889,7 @@ class Webhooks {
                 url: '/rest/api/3/webhook',
                 method: 'DELETE',
                 data: {
-                    webhookIds: parameters === null || parameters === void 0 ? void 0 : parameters.webhookIds,
+                    webhookIds: parameters.webhookIds,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53463,7 +54914,7 @@ class Webhooks {
                 url: '/rest/api/3/webhook/refresh',
                 method: 'PUT',
                 data: {
-                    webhookIds: parameters === null || parameters === void 0 ? void 0 : parameters.webhookIds,
+                    webhookIds: parameters.webhookIds,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53482,15 +54933,16 @@ exports.Webhooks = Webhooks;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowSchemeDrafts = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowSchemeDrafts {
     constructor(client) {
         this.client = client;
     }
     createWorkflowSchemeDraftFromParent(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/createdraft`,
+                url: `/rest/api/3/workflowscheme/${id}/createdraft`,
                 method: 'POST',
             };
             return this.client.sendRequest(config, callback);
@@ -53498,8 +54950,9 @@ class WorkflowSchemeDrafts {
     }
     getWorkflowSchemeDraft(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/draft`,
+                url: `/rest/api/3/workflowscheme/${id}/draft`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -53523,8 +54976,9 @@ class WorkflowSchemeDrafts {
     }
     deleteWorkflowSchemeDraft(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/draft`,
+                url: `/rest/api/3/workflowscheme/${id}/draft`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -53532,8 +54986,9 @@ class WorkflowSchemeDrafts {
     }
     getDraftDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/draft/default`,
+                url: `/rest/api/3/workflowscheme/${id}/draft/default`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -53554,8 +55009,9 @@ class WorkflowSchemeDrafts {
     }
     deleteDraftDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/draft/default`,
+                url: `/rest/api/3/workflowscheme/${id}/draft/default`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -53591,14 +55047,15 @@ class WorkflowSchemeDrafts {
     }
     publishDraftWorkflowScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/draft/publish`,
+                url: `/rest/api/3/workflowscheme/${id}/draft/publish`,
                 method: 'POST',
                 params: {
-                    validateOnly: parameters.validateOnly,
+                    validateOnly: typeof parameters !== 'string' && parameters.validateOnly,
                 },
                 data: {
-                    statusMappings: parameters.statusMappings,
+                    statusMappings: typeof parameters !== 'string' && parameters.statusMappings,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53659,7 +55116,7 @@ exports.WorkflowSchemeDrafts = WorkflowSchemeDrafts;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowSchemeProjectAssociations = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowSchemeProjectAssociations {
     constructor(client) {
         this.client = client;
@@ -53708,7 +55165,7 @@ exports.WorkflowSchemeProjectAssociations = WorkflowSchemeProjectAssociations;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowSchemes = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowSchemes {
     constructor(client) {
         this.client = client;
@@ -53732,19 +55189,19 @@ class WorkflowSchemes {
                 url: '/rest/api/3/workflowscheme',
                 method: 'POST',
                 data: {
-                    id: parameters === null || parameters === void 0 ? void 0 : parameters.id,
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    defaultWorkflow: parameters === null || parameters === void 0 ? void 0 : parameters.defaultWorkflow,
-                    issueTypeMappings: parameters === null || parameters === void 0 ? void 0 : parameters.issueTypeMappings,
-                    originalDefaultWorkflow: parameters === null || parameters === void 0 ? void 0 : parameters.originalDefaultWorkflow,
-                    originalIssueTypeMappings: parameters === null || parameters === void 0 ? void 0 : parameters.originalIssueTypeMappings,
-                    draft: parameters === null || parameters === void 0 ? void 0 : parameters.draft,
-                    lastModifiedUser: parameters === null || parameters === void 0 ? void 0 : parameters.lastModifiedUser,
-                    lastModified: parameters === null || parameters === void 0 ? void 0 : parameters.lastModified,
-                    self: parameters === null || parameters === void 0 ? void 0 : parameters.self,
-                    updateDraftIfNeeded: parameters === null || parameters === void 0 ? void 0 : parameters.updateDraftIfNeeded,
-                    issueTypes: parameters === null || parameters === void 0 ? void 0 : parameters.issueTypes,
+                    id: parameters.id,
+                    name: parameters.name,
+                    description: parameters.description,
+                    defaultWorkflow: parameters.defaultWorkflow,
+                    issueTypeMappings: parameters.issueTypeMappings,
+                    originalDefaultWorkflow: parameters.originalDefaultWorkflow,
+                    originalIssueTypeMappings: parameters.originalIssueTypeMappings,
+                    draft: parameters.draft,
+                    lastModifiedUser: parameters.lastModifiedUser,
+                    lastModified: parameters.lastModified,
+                    self: parameters.self,
+                    updateDraftIfNeeded: parameters.updateDraftIfNeeded,
+                    issueTypes: parameters.issueTypes,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53752,11 +55209,12 @@ class WorkflowSchemes {
     }
     getWorkflowScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}`,
+                url: `/rest/api/3/workflowscheme/${id}`,
                 method: 'GET',
                 params: {
-                    returnDraftIfExists: parameters.returnDraftIfExists,
+                    returnDraftIfExists: typeof parameters !== 'string' && parameters.returnDraftIfExists,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53780,8 +55238,9 @@ class WorkflowSchemes {
     }
     deleteWorkflowScheme(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}`,
+                url: `/rest/api/3/workflowscheme/${id}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -53789,11 +55248,12 @@ class WorkflowSchemes {
     }
     getDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/default`,
+                url: `/rest/api/3/workflowscheme/${id}/default`,
                 method: 'GET',
                 params: {
-                    returnDraftIfExists: parameters.returnDraftIfExists,
+                    returnDraftIfExists: typeof parameters !== 'string' && parameters.returnDraftIfExists,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53814,11 +55274,12 @@ class WorkflowSchemes {
     }
     deleteDefaultWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/default`,
+                url: `/rest/api/3/workflowscheme/${id}/default`,
                 method: 'DELETE',
                 params: {
-                    updateDraftIfNeeded: parameters.updateDraftIfNeeded,
+                    updateDraftIfNeeded: typeof parameters !== 'string' && parameters.updateDraftIfNeeded,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53860,12 +55321,13 @@ class WorkflowSchemes {
     }
     getWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/workflow`,
+                url: `/rest/api/3/workflowscheme/${id}/workflow`,
                 method: 'GET',
                 params: {
-                    workflowName: parameters.workflowName,
-                    returnDraftIfExists: parameters.returnDraftIfExists,
+                    workflowName: typeof parameters !== 'string' && parameters.workflowName,
+                    returnDraftIfExists: typeof parameters !== 'string' && parameters.returnDraftIfExists,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53891,12 +55353,13 @@ class WorkflowSchemes {
     }
     deleteWorkflowMapping(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const id = typeof parameters === 'string' ? parameters : parameters.id;
             const config = {
-                url: `/rest/api/3/workflowscheme/${parameters.id}/workflow`,
+                url: `/rest/api/3/workflowscheme/${id}/workflow`,
                 method: 'DELETE',
                 params: {
-                    workflowName: parameters.workflowName,
-                    updateDraftIfNeeded: parameters.updateDraftIfNeeded,
+                    workflowName: typeof parameters !== 'string' && parameters.workflowName,
+                    updateDraftIfNeeded: typeof parameters !== 'string' && parameters.updateDraftIfNeeded,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -53915,7 +55378,7 @@ exports.WorkflowSchemes = WorkflowSchemes;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowStatusCategories = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowStatusCategories {
     constructor(client) {
         this.client = client;
@@ -53931,8 +55394,9 @@ class WorkflowStatusCategories {
     }
     getStatusCategory(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const idOrKey = typeof parameters === 'string' ? parameters : parameters.idOrKey;
             const config = {
-                url: `/rest/api/3/statuscategory/${parameters.idOrKey}`,
+                url: `/rest/api/3/statuscategory/${idOrKey}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -53951,7 +55415,7 @@ exports.WorkflowStatusCategories = WorkflowStatusCategories;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowStatuses = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowStatuses {
     constructor(client) {
         this.client = client;
@@ -53967,8 +55431,9 @@ class WorkflowStatuses {
     }
     getStatus(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const idOrName = typeof parameters === 'string' ? parameters : parameters.idOrName;
             const config = {
-                url: `/rest/api/3/status/${parameters.idOrName}`,
+                url: `/rest/api/3/status/${idOrName}`,
                 method: 'GET',
             };
             return this.client.sendRequest(config, callback);
@@ -53987,7 +55452,7 @@ exports.WorkflowStatuses = WorkflowStatuses;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowTransitionProperties = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowTransitionProperties {
     constructor(client) {
         this.client = client;
@@ -54064,7 +55529,7 @@ exports.WorkflowTransitionProperties = WorkflowTransitionProperties;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.WorkflowTransitionRules = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 class WorkflowTransitionRules {
     constructor(client) {
         this.client = client;
@@ -54094,7 +55559,7 @@ class WorkflowTransitionRules {
                 url: '/rest/api/3/workflow/rule/config',
                 method: 'PUT',
                 data: {
-                    workflows: parameters === null || parameters === void 0 ? void 0 : parameters.workflows,
+                    workflows: parameters.workflows,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -54125,7 +55590,7 @@ exports.WorkflowTransitionRules = WorkflowTransitionRules;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Workflows = void 0;
-const tslib_1 = __nccwpck_require__(89106);
+const tslib_1 = __nccwpck_require__(4351);
 const paramSerializer_1 = __nccwpck_require__(52517);
 class Workflows {
     constructor(client) {
@@ -54149,10 +55614,10 @@ class Workflows {
                 url: '/rest/api/3/workflow',
                 method: 'POST',
                 data: {
-                    name: parameters === null || parameters === void 0 ? void 0 : parameters.name,
-                    description: parameters === null || parameters === void 0 ? void 0 : parameters.description,
-                    transitions: parameters === null || parameters === void 0 ? void 0 : parameters.transitions,
-                    statuses: parameters === null || parameters === void 0 ? void 0 : parameters.statuses,
+                    name: parameters.name,
+                    description: parameters.description,
+                    transitions: parameters.transitions,
+                    statuses: parameters.statuses,
                 },
             };
             return this.client.sendRequest(config, callback);
@@ -54178,8 +55643,9 @@ class Workflows {
     }
     deleteInactiveWorkflow(parameters, callback) {
         return tslib_1.__awaiter(this, void 0, void 0, function* () {
+            const entityId = typeof parameters === 'string' ? parameters : parameters.entityId;
             const config = {
-                url: `/rest/api/3/workflow/${parameters.entityId}`,
+                url: `/rest/api/3/workflow/${entityId}`,
                 method: 'DELETE',
             };
             return this.client.sendRequest(config, callback);
@@ -72272,7 +73738,7 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 var Stream = _interopDefault(__nccwpck_require__(12781));
 var http = _interopDefault(__nccwpck_require__(13685));
 var Url = _interopDefault(__nccwpck_require__(57310));
-var whatwgUrl = _interopDefault(__nccwpck_require__(73323));
+var whatwgUrl = _interopDefault(__nccwpck_require__(28665));
 var https = _interopDefault(__nccwpck_require__(95687));
 var zlib = _interopDefault(__nccwpck_require__(59796));
 
@@ -73683,6 +75149,20 @@ const isDomainOrSubdomain = function isDomainOrSubdomain(destination, original) 
 };
 
 /**
+ * isSameProtocol reports whether the two provided URLs use the same protocol.
+ *
+ * Both domains must already be in canonical form.
+ * @param {string|URL} original
+ * @param {string|URL} destination
+ */
+const isSameProtocol = function isSameProtocol(destination, original) {
+	const orig = new URL$1(original).protocol;
+	const dest = new URL$1(destination).protocol;
+
+	return orig === dest;
+};
+
+/**
  * Fetch function
  *
  * @param   Mixed    url   Absolute url or Request instance
@@ -73713,7 +75193,7 @@ function fetch(url, opts) {
 			let error = new AbortError('The user aborted a request.');
 			reject(error);
 			if (request.body && request.body instanceof Stream.Readable) {
-				request.body.destroy(error);
+				destroyStream(request.body, error);
 			}
 			if (!response || !response.body) return;
 			response.body.emit('error', error);
@@ -73754,8 +75234,42 @@ function fetch(url, opts) {
 
 		req.on('error', function (err) {
 			reject(new FetchError(`request to ${request.url} failed, reason: ${err.message}`, 'system', err));
+
+			if (response && response.body) {
+				destroyStream(response.body, err);
+			}
+
 			finalize();
 		});
+
+		fixResponseChunkedTransferBadEnding(req, function (err) {
+			if (signal && signal.aborted) {
+				return;
+			}
+
+			if (response && response.body) {
+				destroyStream(response.body, err);
+			}
+		});
+
+		/* c8 ignore next 18 */
+		if (parseInt(process.version.substring(1)) < 14) {
+			// Before Node.js 14, pipeline() does not fully support async iterators and does not always
+			// properly handle when the socket close/end events are out of order.
+			req.on('socket', function (s) {
+				s.addListener('close', function (hadError) {
+					// if a data listener is still present we didn't end cleanly
+					const hasDataListener = s.listenerCount('data') > 0;
+
+					// if end happened before close but the socket didn't emit an error, do it now
+					if (response && hasDataListener && !hadError && !(signal && signal.aborted)) {
+						const err = new Error('Premature close');
+						err.code = 'ERR_STREAM_PREMATURE_CLOSE';
+						response.body.emit('error', err);
+					}
+				});
+			});
+		}
 
 		req.on('response', function (res) {
 			clearTimeout(reqTimeout);
@@ -73828,7 +75342,7 @@ function fetch(url, opts) {
 							size: request.size
 						};
 
-						if (!isDomainOrSubdomain(request.url, locationURL)) {
+						if (!isDomainOrSubdomain(request.url, locationURL) || !isSameProtocol(request.url, locationURL)) {
 							for (const name of ['authorization', 'www-authenticate', 'cookie', 'cookie2']) {
 								requestOpts.headers.delete(name);
 							}
@@ -73921,6 +75435,13 @@ function fetch(url, opts) {
 					response = new Response(body, response_options);
 					resolve(response);
 				});
+				raw.on('end', function () {
+					// some old IIS servers return zero-length OK deflate responses, so 'data' is never emitted.
+					if (!response) {
+						response = new Response(body, response_options);
+						resolve(response);
+					}
+				});
 				return;
 			}
 
@@ -73940,6 +75461,41 @@ function fetch(url, opts) {
 		writeToStream(req, request);
 	});
 }
+function fixResponseChunkedTransferBadEnding(request, errorCallback) {
+	let socket;
+
+	request.on('socket', function (s) {
+		socket = s;
+	});
+
+	request.on('response', function (response) {
+		const headers = response.headers;
+
+		if (headers['transfer-encoding'] === 'chunked' && !headers['content-length']) {
+			response.once('close', function (hadError) {
+				// if a data listener is still present we didn't end cleanly
+				const hasDataListener = socket.listenerCount('data') > 0;
+
+				if (hasDataListener && !hadError) {
+					const err = new Error('Premature close');
+					err.code = 'ERR_STREAM_PREMATURE_CLOSE';
+					errorCallback(err);
+				}
+			});
+		}
+	});
+}
+
+function destroyStream(stream, err) {
+	if (stream.destroy) {
+		stream.destroy(err);
+	} else {
+		// node < 8
+		stream.emit('error', err);
+		stream.end();
+	}
+}
+
 /**
  * Redirect code matching
  *
@@ -73960,2168 +75516,6 @@ exports.Headers = Headers;
 exports.Request = Request;
 exports.Response = Response;
 exports.FetchError = FetchError;
-
-
-/***/ }),
-
-/***/ 42299:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-var punycode = __nccwpck_require__(85477);
-var mappingTable = __nccwpck_require__(1907);
-
-var PROCESSING_OPTIONS = {
-  TRANSITIONAL: 0,
-  NONTRANSITIONAL: 1
-};
-
-function normalize(str) { // fix bug in v8
-  return str.split('\u0000').map(function (s) { return s.normalize('NFC'); }).join('\u0000');
-}
-
-function findStatus(val) {
-  var start = 0;
-  var end = mappingTable.length - 1;
-
-  while (start <= end) {
-    var mid = Math.floor((start + end) / 2);
-
-    var target = mappingTable[mid];
-    if (target[0][0] <= val && target[0][1] >= val) {
-      return target;
-    } else if (target[0][0] > val) {
-      end = mid - 1;
-    } else {
-      start = mid + 1;
-    }
-  }
-
-  return null;
-}
-
-var regexAstralSymbols = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
-
-function countSymbols(string) {
-  return string
-    // replace every surrogate pair with a BMP symbol
-    .replace(regexAstralSymbols, '_')
-    // then get the length
-    .length;
-}
-
-function mapChars(domain_name, useSTD3, processing_option) {
-  var hasError = false;
-  var processed = "";
-
-  var len = countSymbols(domain_name);
-  for (var i = 0; i < len; ++i) {
-    var codePoint = domain_name.codePointAt(i);
-    var status = findStatus(codePoint);
-
-    switch (status[1]) {
-      case "disallowed":
-        hasError = true;
-        processed += String.fromCodePoint(codePoint);
-        break;
-      case "ignored":
-        break;
-      case "mapped":
-        processed += String.fromCodePoint.apply(String, status[2]);
-        break;
-      case "deviation":
-        if (processing_option === PROCESSING_OPTIONS.TRANSITIONAL) {
-          processed += String.fromCodePoint.apply(String, status[2]);
-        } else {
-          processed += String.fromCodePoint(codePoint);
-        }
-        break;
-      case "valid":
-        processed += String.fromCodePoint(codePoint);
-        break;
-      case "disallowed_STD3_mapped":
-        if (useSTD3) {
-          hasError = true;
-          processed += String.fromCodePoint(codePoint);
-        } else {
-          processed += String.fromCodePoint.apply(String, status[2]);
-        }
-        break;
-      case "disallowed_STD3_valid":
-        if (useSTD3) {
-          hasError = true;
-        }
-
-        processed += String.fromCodePoint(codePoint);
-        break;
-    }
-  }
-
-  return {
-    string: processed,
-    error: hasError
-  };
-}
-
-var combiningMarksRegex = /[\u0300-\u036F\u0483-\u0489\u0591-\u05BD\u05BF\u05C1\u05C2\u05C4\u05C5\u05C7\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED\u0711\u0730-\u074A\u07A6-\u07B0\u07EB-\u07F3\u0816-\u0819\u081B-\u0823\u0825-\u0827\u0829-\u082D\u0859-\u085B\u08E4-\u0903\u093A-\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963\u0981-\u0983\u09BC\u09BE-\u09C4\u09C7\u09C8\u09CB-\u09CD\u09D7\u09E2\u09E3\u0A01-\u0A03\u0A3C\u0A3E-\u0A42\u0A47\u0A48\u0A4B-\u0A4D\u0A51\u0A70\u0A71\u0A75\u0A81-\u0A83\u0ABC\u0ABE-\u0AC5\u0AC7-\u0AC9\u0ACB-\u0ACD\u0AE2\u0AE3\u0B01-\u0B03\u0B3C\u0B3E-\u0B44\u0B47\u0B48\u0B4B-\u0B4D\u0B56\u0B57\u0B62\u0B63\u0B82\u0BBE-\u0BC2\u0BC6-\u0BC8\u0BCA-\u0BCD\u0BD7\u0C00-\u0C03\u0C3E-\u0C44\u0C46-\u0C48\u0C4A-\u0C4D\u0C55\u0C56\u0C62\u0C63\u0C81-\u0C83\u0CBC\u0CBE-\u0CC4\u0CC6-\u0CC8\u0CCA-\u0CCD\u0CD5\u0CD6\u0CE2\u0CE3\u0D01-\u0D03\u0D3E-\u0D44\u0D46-\u0D48\u0D4A-\u0D4D\u0D57\u0D62\u0D63\u0D82\u0D83\u0DCA\u0DCF-\u0DD4\u0DD6\u0DD8-\u0DDF\u0DF2\u0DF3\u0E31\u0E34-\u0E3A\u0E47-\u0E4E\u0EB1\u0EB4-\u0EB9\u0EBB\u0EBC\u0EC8-\u0ECD\u0F18\u0F19\u0F35\u0F37\u0F39\u0F3E\u0F3F\u0F71-\u0F84\u0F86\u0F87\u0F8D-\u0F97\u0F99-\u0FBC\u0FC6\u102B-\u103E\u1056-\u1059\u105E-\u1060\u1062-\u1064\u1067-\u106D\u1071-\u1074\u1082-\u108D\u108F\u109A-\u109D\u135D-\u135F\u1712-\u1714\u1732-\u1734\u1752\u1753\u1772\u1773\u17B4-\u17D3\u17DD\u180B-\u180D\u18A9\u1920-\u192B\u1930-\u193B\u19B0-\u19C0\u19C8\u19C9\u1A17-\u1A1B\u1A55-\u1A5E\u1A60-\u1A7C\u1A7F\u1AB0-\u1ABE\u1B00-\u1B04\u1B34-\u1B44\u1B6B-\u1B73\u1B80-\u1B82\u1BA1-\u1BAD\u1BE6-\u1BF3\u1C24-\u1C37\u1CD0-\u1CD2\u1CD4-\u1CE8\u1CED\u1CF2-\u1CF4\u1CF8\u1CF9\u1DC0-\u1DF5\u1DFC-\u1DFF\u20D0-\u20F0\u2CEF-\u2CF1\u2D7F\u2DE0-\u2DFF\u302A-\u302F\u3099\u309A\uA66F-\uA672\uA674-\uA67D\uA69F\uA6F0\uA6F1\uA802\uA806\uA80B\uA823-\uA827\uA880\uA881\uA8B4-\uA8C4\uA8E0-\uA8F1\uA926-\uA92D\uA947-\uA953\uA980-\uA983\uA9B3-\uA9C0\uA9E5\uAA29-\uAA36\uAA43\uAA4C\uAA4D\uAA7B-\uAA7D\uAAB0\uAAB2-\uAAB4\uAAB7\uAAB8\uAABE\uAABF\uAAC1\uAAEB-\uAAEF\uAAF5\uAAF6\uABE3-\uABEA\uABEC\uABED\uFB1E\uFE00-\uFE0F\uFE20-\uFE2D]|\uD800[\uDDFD\uDEE0\uDF76-\uDF7A]|\uD802[\uDE01-\uDE03\uDE05\uDE06\uDE0C-\uDE0F\uDE38-\uDE3A\uDE3F\uDEE5\uDEE6]|\uD804[\uDC00-\uDC02\uDC38-\uDC46\uDC7F-\uDC82\uDCB0-\uDCBA\uDD00-\uDD02\uDD27-\uDD34\uDD73\uDD80-\uDD82\uDDB3-\uDDC0\uDE2C-\uDE37\uDEDF-\uDEEA\uDF01-\uDF03\uDF3C\uDF3E-\uDF44\uDF47\uDF48\uDF4B-\uDF4D\uDF57\uDF62\uDF63\uDF66-\uDF6C\uDF70-\uDF74]|\uD805[\uDCB0-\uDCC3\uDDAF-\uDDB5\uDDB8-\uDDC0\uDE30-\uDE40\uDEAB-\uDEB7]|\uD81A[\uDEF0-\uDEF4\uDF30-\uDF36]|\uD81B[\uDF51-\uDF7E\uDF8F-\uDF92]|\uD82F[\uDC9D\uDC9E]|\uD834[\uDD65-\uDD69\uDD6D-\uDD72\uDD7B-\uDD82\uDD85-\uDD8B\uDDAA-\uDDAD\uDE42-\uDE44]|\uD83A[\uDCD0-\uDCD6]|\uDB40[\uDD00-\uDDEF]/;
-
-function validateLabel(label, processing_option) {
-  if (label.substr(0, 4) === "xn--") {
-    label = punycode.toUnicode(label);
-    processing_option = PROCESSING_OPTIONS.NONTRANSITIONAL;
-  }
-
-  var error = false;
-
-  if (normalize(label) !== label ||
-      (label[3] === "-" && label[4] === "-") ||
-      label[0] === "-" || label[label.length - 1] === "-" ||
-      label.indexOf(".") !== -1 ||
-      label.search(combiningMarksRegex) === 0) {
-    error = true;
-  }
-
-  var len = countSymbols(label);
-  for (var i = 0; i < len; ++i) {
-    var status = findStatus(label.codePointAt(i));
-    if ((processing === PROCESSING_OPTIONS.TRANSITIONAL && status[1] !== "valid") ||
-        (processing === PROCESSING_OPTIONS.NONTRANSITIONAL &&
-         status[1] !== "valid" && status[1] !== "deviation")) {
-      error = true;
-      break;
-    }
-  }
-
-  return {
-    label: label,
-    error: error
-  };
-}
-
-function processing(domain_name, useSTD3, processing_option) {
-  var result = mapChars(domain_name, useSTD3, processing_option);
-  result.string = normalize(result.string);
-
-  var labels = result.string.split(".");
-  for (var i = 0; i < labels.length; ++i) {
-    try {
-      var validation = validateLabel(labels[i]);
-      labels[i] = validation.label;
-      result.error = result.error || validation.error;
-    } catch(e) {
-      result.error = true;
-    }
-  }
-
-  return {
-    string: labels.join("."),
-    error: result.error
-  };
-}
-
-module.exports.toASCII = function(domain_name, useSTD3, processing_option, verifyDnsLength) {
-  var result = processing(domain_name, useSTD3, processing_option);
-  var labels = result.string.split(".");
-  labels = labels.map(function(l) {
-    try {
-      return punycode.toASCII(l);
-    } catch(e) {
-      result.error = true;
-      return l;
-    }
-  });
-
-  if (verifyDnsLength) {
-    var total = labels.slice(0, labels.length - 1).join(".").length;
-    if (total.length > 253 || total.length === 0) {
-      result.error = true;
-    }
-
-    for (var i=0; i < labels.length; ++i) {
-      if (labels.length > 63 || labels.length === 0) {
-        result.error = true;
-        break;
-      }
-    }
-  }
-
-  if (result.error) return null;
-  return labels.join(".");
-};
-
-module.exports.toUnicode = function(domain_name, useSTD3) {
-  var result = processing(domain_name, useSTD3, PROCESSING_OPTIONS.NONTRANSITIONAL);
-
-  return {
-    domain: result.string,
-    error: result.error
-  };
-};
-
-module.exports.PROCESSING_OPTIONS = PROCESSING_OPTIONS;
-
-
-/***/ }),
-
-/***/ 15871:
-/***/ ((module) => {
-
-"use strict";
-
-
-var conversions = {};
-module.exports = conversions;
-
-function sign(x) {
-    return x < 0 ? -1 : 1;
-}
-
-function evenRound(x) {
-    // Round x to the nearest integer, choosing the even integer if it lies halfway between two.
-    if ((x % 1) === 0.5 && (x & 1) === 0) { // [even number].5; round down (i.e. floor)
-        return Math.floor(x);
-    } else {
-        return Math.round(x);
-    }
-}
-
-function createNumberConversion(bitLength, typeOpts) {
-    if (!typeOpts.unsigned) {
-        --bitLength;
-    }
-    const lowerBound = typeOpts.unsigned ? 0 : -Math.pow(2, bitLength);
-    const upperBound = Math.pow(2, bitLength) - 1;
-
-    const moduloVal = typeOpts.moduloBitLength ? Math.pow(2, typeOpts.moduloBitLength) : Math.pow(2, bitLength);
-    const moduloBound = typeOpts.moduloBitLength ? Math.pow(2, typeOpts.moduloBitLength - 1) : Math.pow(2, bitLength - 1);
-
-    return function(V, opts) {
-        if (!opts) opts = {};
-
-        let x = +V;
-
-        if (opts.enforceRange) {
-            if (!Number.isFinite(x)) {
-                throw new TypeError("Argument is not a finite number");
-            }
-
-            x = sign(x) * Math.floor(Math.abs(x));
-            if (x < lowerBound || x > upperBound) {
-                throw new TypeError("Argument is not in byte range");
-            }
-
-            return x;
-        }
-
-        if (!isNaN(x) && opts.clamp) {
-            x = evenRound(x);
-
-            if (x < lowerBound) x = lowerBound;
-            if (x > upperBound) x = upperBound;
-            return x;
-        }
-
-        if (!Number.isFinite(x) || x === 0) {
-            return 0;
-        }
-
-        x = sign(x) * Math.floor(Math.abs(x));
-        x = x % moduloVal;
-
-        if (!typeOpts.unsigned && x >= moduloBound) {
-            return x - moduloVal;
-        } else if (typeOpts.unsigned) {
-            if (x < 0) {
-              x += moduloVal;
-            } else if (x === -0) { // don't return negative zero
-              return 0;
-            }
-        }
-
-        return x;
-    }
-}
-
-conversions["void"] = function () {
-    return undefined;
-};
-
-conversions["boolean"] = function (val) {
-    return !!val;
-};
-
-conversions["byte"] = createNumberConversion(8, { unsigned: false });
-conversions["octet"] = createNumberConversion(8, { unsigned: true });
-
-conversions["short"] = createNumberConversion(16, { unsigned: false });
-conversions["unsigned short"] = createNumberConversion(16, { unsigned: true });
-
-conversions["long"] = createNumberConversion(32, { unsigned: false });
-conversions["unsigned long"] = createNumberConversion(32, { unsigned: true });
-
-conversions["long long"] = createNumberConversion(32, { unsigned: false, moduloBitLength: 64 });
-conversions["unsigned long long"] = createNumberConversion(32, { unsigned: true, moduloBitLength: 64 });
-
-conversions["double"] = function (V) {
-    const x = +V;
-
-    if (!Number.isFinite(x)) {
-        throw new TypeError("Argument is not a finite floating-point value");
-    }
-
-    return x;
-};
-
-conversions["unrestricted double"] = function (V) {
-    const x = +V;
-
-    if (isNaN(x)) {
-        throw new TypeError("Argument is NaN");
-    }
-
-    return x;
-};
-
-// not quite valid, but good enough for JS
-conversions["float"] = conversions["double"];
-conversions["unrestricted float"] = conversions["unrestricted double"];
-
-conversions["DOMString"] = function (V, opts) {
-    if (!opts) opts = {};
-
-    if (opts.treatNullAsEmptyString && V === null) {
-        return "";
-    }
-
-    return String(V);
-};
-
-conversions["ByteString"] = function (V, opts) {
-    const x = String(V);
-    let c = undefined;
-    for (let i = 0; (c = x.codePointAt(i)) !== undefined; ++i) {
-        if (c > 255) {
-            throw new TypeError("Argument is not a valid bytestring");
-        }
-    }
-
-    return x;
-};
-
-conversions["USVString"] = function (V) {
-    const S = String(V);
-    const n = S.length;
-    const U = [];
-    for (let i = 0; i < n; ++i) {
-        const c = S.charCodeAt(i);
-        if (c < 0xD800 || c > 0xDFFF) {
-            U.push(String.fromCodePoint(c));
-        } else if (0xDC00 <= c && c <= 0xDFFF) {
-            U.push(String.fromCodePoint(0xFFFD));
-        } else {
-            if (i === n - 1) {
-                U.push(String.fromCodePoint(0xFFFD));
-            } else {
-                const d = S.charCodeAt(i + 1);
-                if (0xDC00 <= d && d <= 0xDFFF) {
-                    const a = c & 0x3FF;
-                    const b = d & 0x3FF;
-                    U.push(String.fromCodePoint((2 << 15) + (2 << 9) * a + b));
-                    ++i;
-                } else {
-                    U.push(String.fromCodePoint(0xFFFD));
-                }
-            }
-        }
-    }
-
-    return U.join('');
-};
-
-conversions["Date"] = function (V, opts) {
-    if (!(V instanceof Date)) {
-        throw new TypeError("Argument is not a Date object");
-    }
-    if (isNaN(V)) {
-        return undefined;
-    }
-
-    return V;
-};
-
-conversions["RegExp"] = function (V, opts) {
-    if (!(V instanceof RegExp)) {
-        V = new RegExp(V);
-    }
-
-    return V;
-};
-
-
-/***/ }),
-
-/***/ 58262:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-const usm = __nccwpck_require__(40033);
-
-exports.implementation = class URLImpl {
-  constructor(constructorArgs) {
-    const url = constructorArgs[0];
-    const base = constructorArgs[1];
-
-    let parsedBase = null;
-    if (base !== undefined) {
-      parsedBase = usm.basicURLParse(base);
-      if (parsedBase === "failure") {
-        throw new TypeError("Invalid base URL");
-      }
-    }
-
-    const parsedURL = usm.basicURLParse(url, { baseURL: parsedBase });
-    if (parsedURL === "failure") {
-      throw new TypeError("Invalid URL");
-    }
-
-    this._url = parsedURL;
-
-    // TODO: query stuff
-  }
-
-  get href() {
-    return usm.serializeURL(this._url);
-  }
-
-  set href(v) {
-    const parsedURL = usm.basicURLParse(v);
-    if (parsedURL === "failure") {
-      throw new TypeError("Invalid URL");
-    }
-
-    this._url = parsedURL;
-  }
-
-  get origin() {
-    return usm.serializeURLOrigin(this._url);
-  }
-
-  get protocol() {
-    return this._url.scheme + ":";
-  }
-
-  set protocol(v) {
-    usm.basicURLParse(v + ":", { url: this._url, stateOverride: "scheme start" });
-  }
-
-  get username() {
-    return this._url.username;
-  }
-
-  set username(v) {
-    if (usm.cannotHaveAUsernamePasswordPort(this._url)) {
-      return;
-    }
-
-    usm.setTheUsername(this._url, v);
-  }
-
-  get password() {
-    return this._url.password;
-  }
-
-  set password(v) {
-    if (usm.cannotHaveAUsernamePasswordPort(this._url)) {
-      return;
-    }
-
-    usm.setThePassword(this._url, v);
-  }
-
-  get host() {
-    const url = this._url;
-
-    if (url.host === null) {
-      return "";
-    }
-
-    if (url.port === null) {
-      return usm.serializeHost(url.host);
-    }
-
-    return usm.serializeHost(url.host) + ":" + usm.serializeInteger(url.port);
-  }
-
-  set host(v) {
-    if (this._url.cannotBeABaseURL) {
-      return;
-    }
-
-    usm.basicURLParse(v, { url: this._url, stateOverride: "host" });
-  }
-
-  get hostname() {
-    if (this._url.host === null) {
-      return "";
-    }
-
-    return usm.serializeHost(this._url.host);
-  }
-
-  set hostname(v) {
-    if (this._url.cannotBeABaseURL) {
-      return;
-    }
-
-    usm.basicURLParse(v, { url: this._url, stateOverride: "hostname" });
-  }
-
-  get port() {
-    if (this._url.port === null) {
-      return "";
-    }
-
-    return usm.serializeInteger(this._url.port);
-  }
-
-  set port(v) {
-    if (usm.cannotHaveAUsernamePasswordPort(this._url)) {
-      return;
-    }
-
-    if (v === "") {
-      this._url.port = null;
-    } else {
-      usm.basicURLParse(v, { url: this._url, stateOverride: "port" });
-    }
-  }
-
-  get pathname() {
-    if (this._url.cannotBeABaseURL) {
-      return this._url.path[0];
-    }
-
-    if (this._url.path.length === 0) {
-      return "";
-    }
-
-    return "/" + this._url.path.join("/");
-  }
-
-  set pathname(v) {
-    if (this._url.cannotBeABaseURL) {
-      return;
-    }
-
-    this._url.path = [];
-    usm.basicURLParse(v, { url: this._url, stateOverride: "path start" });
-  }
-
-  get search() {
-    if (this._url.query === null || this._url.query === "") {
-      return "";
-    }
-
-    return "?" + this._url.query;
-  }
-
-  set search(v) {
-    // TODO: query stuff
-
-    const url = this._url;
-
-    if (v === "") {
-      url.query = null;
-      return;
-    }
-
-    const input = v[0] === "?" ? v.substring(1) : v;
-    url.query = "";
-    usm.basicURLParse(input, { url, stateOverride: "query" });
-  }
-
-  get hash() {
-    if (this._url.fragment === null || this._url.fragment === "") {
-      return "";
-    }
-
-    return "#" + this._url.fragment;
-  }
-
-  set hash(v) {
-    if (v === "") {
-      this._url.fragment = null;
-      return;
-    }
-
-    const input = v[0] === "#" ? v.substring(1) : v;
-    this._url.fragment = "";
-    usm.basicURLParse(input, { url: this._url, stateOverride: "fragment" });
-  }
-
-  toJSON() {
-    return this.href;
-  }
-};
-
-
-/***/ }),
-
-/***/ 80653:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-const conversions = __nccwpck_require__(15871);
-const utils = __nccwpck_require__(60276);
-const Impl = __nccwpck_require__(58262);
-
-const impl = utils.implSymbol;
-
-function URL(url) {
-  if (!this || this[impl] || !(this instanceof URL)) {
-    throw new TypeError("Failed to construct 'URL': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
-  }
-  if (arguments.length < 1) {
-    throw new TypeError("Failed to construct 'URL': 1 argument required, but only " + arguments.length + " present.");
-  }
-  const args = [];
-  for (let i = 0; i < arguments.length && i < 2; ++i) {
-    args[i] = arguments[i];
-  }
-  args[0] = conversions["USVString"](args[0]);
-  if (args[1] !== undefined) {
-  args[1] = conversions["USVString"](args[1]);
-  }
-
-  module.exports.setup(this, args);
-}
-
-URL.prototype.toJSON = function toJSON() {
-  if (!this || !module.exports.is(this)) {
-    throw new TypeError("Illegal invocation");
-  }
-  const args = [];
-  for (let i = 0; i < arguments.length && i < 0; ++i) {
-    args[i] = arguments[i];
-  }
-  return this[impl].toJSON.apply(this[impl], args);
-};
-Object.defineProperty(URL.prototype, "href", {
-  get() {
-    return this[impl].href;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].href = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-URL.prototype.toString = function () {
-  if (!this || !module.exports.is(this)) {
-    throw new TypeError("Illegal invocation");
-  }
-  return this.href;
-};
-
-Object.defineProperty(URL.prototype, "origin", {
-  get() {
-    return this[impl].origin;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "protocol", {
-  get() {
-    return this[impl].protocol;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].protocol = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "username", {
-  get() {
-    return this[impl].username;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].username = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "password", {
-  get() {
-    return this[impl].password;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].password = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "host", {
-  get() {
-    return this[impl].host;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].host = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "hostname", {
-  get() {
-    return this[impl].hostname;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].hostname = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "port", {
-  get() {
-    return this[impl].port;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].port = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "pathname", {
-  get() {
-    return this[impl].pathname;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].pathname = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "search", {
-  get() {
-    return this[impl].search;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].search = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-Object.defineProperty(URL.prototype, "hash", {
-  get() {
-    return this[impl].hash;
-  },
-  set(V) {
-    V = conversions["USVString"](V);
-    this[impl].hash = V;
-  },
-  enumerable: true,
-  configurable: true
-});
-
-
-module.exports = {
-  is(obj) {
-    return !!obj && obj[impl] instanceof Impl.implementation;
-  },
-  create(constructorArgs, privateData) {
-    let obj = Object.create(URL.prototype);
-    this.setup(obj, constructorArgs, privateData);
-    return obj;
-  },
-  setup(obj, constructorArgs, privateData) {
-    if (!privateData) privateData = {};
-    privateData.wrapper = obj;
-
-    obj[impl] = new Impl.implementation(constructorArgs, privateData);
-    obj[impl][utils.wrapperSymbol] = obj;
-  },
-  interface: URL,
-  expose: {
-    Window: { URL: URL },
-    Worker: { URL: URL }
-  }
-};
-
-
-
-/***/ }),
-
-/***/ 73323:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-exports.URL = __nccwpck_require__(80653)["interface"];
-exports.serializeURL = __nccwpck_require__(40033).serializeURL;
-exports.serializeURLOrigin = __nccwpck_require__(40033).serializeURLOrigin;
-exports.basicURLParse = __nccwpck_require__(40033).basicURLParse;
-exports.setTheUsername = __nccwpck_require__(40033).setTheUsername;
-exports.setThePassword = __nccwpck_require__(40033).setThePassword;
-exports.serializeHost = __nccwpck_require__(40033).serializeHost;
-exports.serializeInteger = __nccwpck_require__(40033).serializeInteger;
-exports.parseURL = __nccwpck_require__(40033).parseURL;
-
-
-/***/ }),
-
-/***/ 40033:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-const punycode = __nccwpck_require__(85477);
-const tr46 = __nccwpck_require__(42299);
-
-const specialSchemes = {
-  ftp: 21,
-  file: null,
-  gopher: 70,
-  http: 80,
-  https: 443,
-  ws: 80,
-  wss: 443
-};
-
-const failure = Symbol("failure");
-
-function countSymbols(str) {
-  return punycode.ucs2.decode(str).length;
-}
-
-function at(input, idx) {
-  const c = input[idx];
-  return isNaN(c) ? undefined : String.fromCodePoint(c);
-}
-
-function isASCIIDigit(c) {
-  return c >= 0x30 && c <= 0x39;
-}
-
-function isASCIIAlpha(c) {
-  return (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A);
-}
-
-function isASCIIAlphanumeric(c) {
-  return isASCIIAlpha(c) || isASCIIDigit(c);
-}
-
-function isASCIIHex(c) {
-  return isASCIIDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
-}
-
-function isSingleDot(buffer) {
-  return buffer === "." || buffer.toLowerCase() === "%2e";
-}
-
-function isDoubleDot(buffer) {
-  buffer = buffer.toLowerCase();
-  return buffer === ".." || buffer === "%2e." || buffer === ".%2e" || buffer === "%2e%2e";
-}
-
-function isWindowsDriveLetterCodePoints(cp1, cp2) {
-  return isASCIIAlpha(cp1) && (cp2 === 58 || cp2 === 124);
-}
-
-function isWindowsDriveLetterString(string) {
-  return string.length === 2 && isASCIIAlpha(string.codePointAt(0)) && (string[1] === ":" || string[1] === "|");
-}
-
-function isNormalizedWindowsDriveLetterString(string) {
-  return string.length === 2 && isASCIIAlpha(string.codePointAt(0)) && string[1] === ":";
-}
-
-function containsForbiddenHostCodePoint(string) {
-  return string.search(/\u0000|\u0009|\u000A|\u000D|\u0020|#|%|\/|:|\?|@|\[|\\|\]/) !== -1;
-}
-
-function containsForbiddenHostCodePointExcludingPercent(string) {
-  return string.search(/\u0000|\u0009|\u000A|\u000D|\u0020|#|\/|:|\?|@|\[|\\|\]/) !== -1;
-}
-
-function isSpecialScheme(scheme) {
-  return specialSchemes[scheme] !== undefined;
-}
-
-function isSpecial(url) {
-  return isSpecialScheme(url.scheme);
-}
-
-function defaultPort(scheme) {
-  return specialSchemes[scheme];
-}
-
-function percentEncode(c) {
-  let hex = c.toString(16).toUpperCase();
-  if (hex.length === 1) {
-    hex = "0" + hex;
-  }
-
-  return "%" + hex;
-}
-
-function utf8PercentEncode(c) {
-  const buf = new Buffer(c);
-
-  let str = "";
-
-  for (let i = 0; i < buf.length; ++i) {
-    str += percentEncode(buf[i]);
-  }
-
-  return str;
-}
-
-function utf8PercentDecode(str) {
-  const input = new Buffer(str);
-  const output = [];
-  for (let i = 0; i < input.length; ++i) {
-    if (input[i] !== 37) {
-      output.push(input[i]);
-    } else if (input[i] === 37 && isASCIIHex(input[i + 1]) && isASCIIHex(input[i + 2])) {
-      output.push(parseInt(input.slice(i + 1, i + 3).toString(), 16));
-      i += 2;
-    } else {
-      output.push(input[i]);
-    }
-  }
-  return new Buffer(output).toString();
-}
-
-function isC0ControlPercentEncode(c) {
-  return c <= 0x1F || c > 0x7E;
-}
-
-const extraPathPercentEncodeSet = new Set([32, 34, 35, 60, 62, 63, 96, 123, 125]);
-function isPathPercentEncode(c) {
-  return isC0ControlPercentEncode(c) || extraPathPercentEncodeSet.has(c);
-}
-
-const extraUserinfoPercentEncodeSet =
-  new Set([47, 58, 59, 61, 64, 91, 92, 93, 94, 124]);
-function isUserinfoPercentEncode(c) {
-  return isPathPercentEncode(c) || extraUserinfoPercentEncodeSet.has(c);
-}
-
-function percentEncodeChar(c, encodeSetPredicate) {
-  const cStr = String.fromCodePoint(c);
-
-  if (encodeSetPredicate(c)) {
-    return utf8PercentEncode(cStr);
-  }
-
-  return cStr;
-}
-
-function parseIPv4Number(input) {
-  let R = 10;
-
-  if (input.length >= 2 && input.charAt(0) === "0" && input.charAt(1).toLowerCase() === "x") {
-    input = input.substring(2);
-    R = 16;
-  } else if (input.length >= 2 && input.charAt(0) === "0") {
-    input = input.substring(1);
-    R = 8;
-  }
-
-  if (input === "") {
-    return 0;
-  }
-
-  const regex = R === 10 ? /[^0-9]/ : (R === 16 ? /[^0-9A-Fa-f]/ : /[^0-7]/);
-  if (regex.test(input)) {
-    return failure;
-  }
-
-  return parseInt(input, R);
-}
-
-function parseIPv4(input) {
-  const parts = input.split(".");
-  if (parts[parts.length - 1] === "") {
-    if (parts.length > 1) {
-      parts.pop();
-    }
-  }
-
-  if (parts.length > 4) {
-    return input;
-  }
-
-  const numbers = [];
-  for (const part of parts) {
-    if (part === "") {
-      return input;
-    }
-    const n = parseIPv4Number(part);
-    if (n === failure) {
-      return input;
-    }
-
-    numbers.push(n);
-  }
-
-  for (let i = 0; i < numbers.length - 1; ++i) {
-    if (numbers[i] > 255) {
-      return failure;
-    }
-  }
-  if (numbers[numbers.length - 1] >= Math.pow(256, 5 - numbers.length)) {
-    return failure;
-  }
-
-  let ipv4 = numbers.pop();
-  let counter = 0;
-
-  for (const n of numbers) {
-    ipv4 += n * Math.pow(256, 3 - counter);
-    ++counter;
-  }
-
-  return ipv4;
-}
-
-function serializeIPv4(address) {
-  let output = "";
-  let n = address;
-
-  for (let i = 1; i <= 4; ++i) {
-    output = String(n % 256) + output;
-    if (i !== 4) {
-      output = "." + output;
-    }
-    n = Math.floor(n / 256);
-  }
-
-  return output;
-}
-
-function parseIPv6(input) {
-  const address = [0, 0, 0, 0, 0, 0, 0, 0];
-  let pieceIndex = 0;
-  let compress = null;
-  let pointer = 0;
-
-  input = punycode.ucs2.decode(input);
-
-  if (input[pointer] === 58) {
-    if (input[pointer + 1] !== 58) {
-      return failure;
-    }
-
-    pointer += 2;
-    ++pieceIndex;
-    compress = pieceIndex;
-  }
-
-  while (pointer < input.length) {
-    if (pieceIndex === 8) {
-      return failure;
-    }
-
-    if (input[pointer] === 58) {
-      if (compress !== null) {
-        return failure;
-      }
-      ++pointer;
-      ++pieceIndex;
-      compress = pieceIndex;
-      continue;
-    }
-
-    let value = 0;
-    let length = 0;
-
-    while (length < 4 && isASCIIHex(input[pointer])) {
-      value = value * 0x10 + parseInt(at(input, pointer), 16);
-      ++pointer;
-      ++length;
-    }
-
-    if (input[pointer] === 46) {
-      if (length === 0) {
-        return failure;
-      }
-
-      pointer -= length;
-
-      if (pieceIndex > 6) {
-        return failure;
-      }
-
-      let numbersSeen = 0;
-
-      while (input[pointer] !== undefined) {
-        let ipv4Piece = null;
-
-        if (numbersSeen > 0) {
-          if (input[pointer] === 46 && numbersSeen < 4) {
-            ++pointer;
-          } else {
-            return failure;
-          }
-        }
-
-        if (!isASCIIDigit(input[pointer])) {
-          return failure;
-        }
-
-        while (isASCIIDigit(input[pointer])) {
-          const number = parseInt(at(input, pointer));
-          if (ipv4Piece === null) {
-            ipv4Piece = number;
-          } else if (ipv4Piece === 0) {
-            return failure;
-          } else {
-            ipv4Piece = ipv4Piece * 10 + number;
-          }
-          if (ipv4Piece > 255) {
-            return failure;
-          }
-          ++pointer;
-        }
-
-        address[pieceIndex] = address[pieceIndex] * 0x100 + ipv4Piece;
-
-        ++numbersSeen;
-
-        if (numbersSeen === 2 || numbersSeen === 4) {
-          ++pieceIndex;
-        }
-      }
-
-      if (numbersSeen !== 4) {
-        return failure;
-      }
-
-      break;
-    } else if (input[pointer] === 58) {
-      ++pointer;
-      if (input[pointer] === undefined) {
-        return failure;
-      }
-    } else if (input[pointer] !== undefined) {
-      return failure;
-    }
-
-    address[pieceIndex] = value;
-    ++pieceIndex;
-  }
-
-  if (compress !== null) {
-    let swaps = pieceIndex - compress;
-    pieceIndex = 7;
-    while (pieceIndex !== 0 && swaps > 0) {
-      const temp = address[compress + swaps - 1];
-      address[compress + swaps - 1] = address[pieceIndex];
-      address[pieceIndex] = temp;
-      --pieceIndex;
-      --swaps;
-    }
-  } else if (compress === null && pieceIndex !== 8) {
-    return failure;
-  }
-
-  return address;
-}
-
-function serializeIPv6(address) {
-  let output = "";
-  const seqResult = findLongestZeroSequence(address);
-  const compress = seqResult.idx;
-  let ignore0 = false;
-
-  for (let pieceIndex = 0; pieceIndex <= 7; ++pieceIndex) {
-    if (ignore0 && address[pieceIndex] === 0) {
-      continue;
-    } else if (ignore0) {
-      ignore0 = false;
-    }
-
-    if (compress === pieceIndex) {
-      const separator = pieceIndex === 0 ? "::" : ":";
-      output += separator;
-      ignore0 = true;
-      continue;
-    }
-
-    output += address[pieceIndex].toString(16);
-
-    if (pieceIndex !== 7) {
-      output += ":";
-    }
-  }
-
-  return output;
-}
-
-function parseHost(input, isSpecialArg) {
-  if (input[0] === "[") {
-    if (input[input.length - 1] !== "]") {
-      return failure;
-    }
-
-    return parseIPv6(input.substring(1, input.length - 1));
-  }
-
-  if (!isSpecialArg) {
-    return parseOpaqueHost(input);
-  }
-
-  const domain = utf8PercentDecode(input);
-  const asciiDomain = tr46.toASCII(domain, false, tr46.PROCESSING_OPTIONS.NONTRANSITIONAL, false);
-  if (asciiDomain === null) {
-    return failure;
-  }
-
-  if (containsForbiddenHostCodePoint(asciiDomain)) {
-    return failure;
-  }
-
-  const ipv4Host = parseIPv4(asciiDomain);
-  if (typeof ipv4Host === "number" || ipv4Host === failure) {
-    return ipv4Host;
-  }
-
-  return asciiDomain;
-}
-
-function parseOpaqueHost(input) {
-  if (containsForbiddenHostCodePointExcludingPercent(input)) {
-    return failure;
-  }
-
-  let output = "";
-  const decoded = punycode.ucs2.decode(input);
-  for (let i = 0; i < decoded.length; ++i) {
-    output += percentEncodeChar(decoded[i], isC0ControlPercentEncode);
-  }
-  return output;
-}
-
-function findLongestZeroSequence(arr) {
-  let maxIdx = null;
-  let maxLen = 1; // only find elements > 1
-  let currStart = null;
-  let currLen = 0;
-
-  for (let i = 0; i < arr.length; ++i) {
-    if (arr[i] !== 0) {
-      if (currLen > maxLen) {
-        maxIdx = currStart;
-        maxLen = currLen;
-      }
-
-      currStart = null;
-      currLen = 0;
-    } else {
-      if (currStart === null) {
-        currStart = i;
-      }
-      ++currLen;
-    }
-  }
-
-  // if trailing zeros
-  if (currLen > maxLen) {
-    maxIdx = currStart;
-    maxLen = currLen;
-  }
-
-  return {
-    idx: maxIdx,
-    len: maxLen
-  };
-}
-
-function serializeHost(host) {
-  if (typeof host === "number") {
-    return serializeIPv4(host);
-  }
-
-  // IPv6 serializer
-  if (host instanceof Array) {
-    return "[" + serializeIPv6(host) + "]";
-  }
-
-  return host;
-}
-
-function trimControlChars(url) {
-  return url.replace(/^[\u0000-\u001F\u0020]+|[\u0000-\u001F\u0020]+$/g, "");
-}
-
-function trimTabAndNewline(url) {
-  return url.replace(/\u0009|\u000A|\u000D/g, "");
-}
-
-function shortenPath(url) {
-  const path = url.path;
-  if (path.length === 0) {
-    return;
-  }
-  if (url.scheme === "file" && path.length === 1 && isNormalizedWindowsDriveLetter(path[0])) {
-    return;
-  }
-
-  path.pop();
-}
-
-function includesCredentials(url) {
-  return url.username !== "" || url.password !== "";
-}
-
-function cannotHaveAUsernamePasswordPort(url) {
-  return url.host === null || url.host === "" || url.cannotBeABaseURL || url.scheme === "file";
-}
-
-function isNormalizedWindowsDriveLetter(string) {
-  return /^[A-Za-z]:$/.test(string);
-}
-
-function URLStateMachine(input, base, encodingOverride, url, stateOverride) {
-  this.pointer = 0;
-  this.input = input;
-  this.base = base || null;
-  this.encodingOverride = encodingOverride || "utf-8";
-  this.stateOverride = stateOverride;
-  this.url = url;
-  this.failure = false;
-  this.parseError = false;
-
-  if (!this.url) {
-    this.url = {
-      scheme: "",
-      username: "",
-      password: "",
-      host: null,
-      port: null,
-      path: [],
-      query: null,
-      fragment: null,
-
-      cannotBeABaseURL: false
-    };
-
-    const res = trimControlChars(this.input);
-    if (res !== this.input) {
-      this.parseError = true;
-    }
-    this.input = res;
-  }
-
-  const res = trimTabAndNewline(this.input);
-  if (res !== this.input) {
-    this.parseError = true;
-  }
-  this.input = res;
-
-  this.state = stateOverride || "scheme start";
-
-  this.buffer = "";
-  this.atFlag = false;
-  this.arrFlag = false;
-  this.passwordTokenSeenFlag = false;
-
-  this.input = punycode.ucs2.decode(this.input);
-
-  for (; this.pointer <= this.input.length; ++this.pointer) {
-    const c = this.input[this.pointer];
-    const cStr = isNaN(c) ? undefined : String.fromCodePoint(c);
-
-    // exec state machine
-    const ret = this["parse " + this.state](c, cStr);
-    if (!ret) {
-      break; // terminate algorithm
-    } else if (ret === failure) {
-      this.failure = true;
-      break;
-    }
-  }
-}
-
-URLStateMachine.prototype["parse scheme start"] = function parseSchemeStart(c, cStr) {
-  if (isASCIIAlpha(c)) {
-    this.buffer += cStr.toLowerCase();
-    this.state = "scheme";
-  } else if (!this.stateOverride) {
-    this.state = "no scheme";
-    --this.pointer;
-  } else {
-    this.parseError = true;
-    return failure;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse scheme"] = function parseScheme(c, cStr) {
-  if (isASCIIAlphanumeric(c) || c === 43 || c === 45 || c === 46) {
-    this.buffer += cStr.toLowerCase();
-  } else if (c === 58) {
-    if (this.stateOverride) {
-      if (isSpecial(this.url) && !isSpecialScheme(this.buffer)) {
-        return false;
-      }
-
-      if (!isSpecial(this.url) && isSpecialScheme(this.buffer)) {
-        return false;
-      }
-
-      if ((includesCredentials(this.url) || this.url.port !== null) && this.buffer === "file") {
-        return false;
-      }
-
-      if (this.url.scheme === "file" && (this.url.host === "" || this.url.host === null)) {
-        return false;
-      }
-    }
-    this.url.scheme = this.buffer;
-    this.buffer = "";
-    if (this.stateOverride) {
-      return false;
-    }
-    if (this.url.scheme === "file") {
-      if (this.input[this.pointer + 1] !== 47 || this.input[this.pointer + 2] !== 47) {
-        this.parseError = true;
-      }
-      this.state = "file";
-    } else if (isSpecial(this.url) && this.base !== null && this.base.scheme === this.url.scheme) {
-      this.state = "special relative or authority";
-    } else if (isSpecial(this.url)) {
-      this.state = "special authority slashes";
-    } else if (this.input[this.pointer + 1] === 47) {
-      this.state = "path or authority";
-      ++this.pointer;
-    } else {
-      this.url.cannotBeABaseURL = true;
-      this.url.path.push("");
-      this.state = "cannot-be-a-base-URL path";
-    }
-  } else if (!this.stateOverride) {
-    this.buffer = "";
-    this.state = "no scheme";
-    this.pointer = -1;
-  } else {
-    this.parseError = true;
-    return failure;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse no scheme"] = function parseNoScheme(c) {
-  if (this.base === null || (this.base.cannotBeABaseURL && c !== 35)) {
-    return failure;
-  } else if (this.base.cannotBeABaseURL && c === 35) {
-    this.url.scheme = this.base.scheme;
-    this.url.path = this.base.path.slice();
-    this.url.query = this.base.query;
-    this.url.fragment = "";
-    this.url.cannotBeABaseURL = true;
-    this.state = "fragment";
-  } else if (this.base.scheme === "file") {
-    this.state = "file";
-    --this.pointer;
-  } else {
-    this.state = "relative";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse special relative or authority"] = function parseSpecialRelativeOrAuthority(c) {
-  if (c === 47 && this.input[this.pointer + 1] === 47) {
-    this.state = "special authority ignore slashes";
-    ++this.pointer;
-  } else {
-    this.parseError = true;
-    this.state = "relative";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse path or authority"] = function parsePathOrAuthority(c) {
-  if (c === 47) {
-    this.state = "authority";
-  } else {
-    this.state = "path";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse relative"] = function parseRelative(c) {
-  this.url.scheme = this.base.scheme;
-  if (isNaN(c)) {
-    this.url.username = this.base.username;
-    this.url.password = this.base.password;
-    this.url.host = this.base.host;
-    this.url.port = this.base.port;
-    this.url.path = this.base.path.slice();
-    this.url.query = this.base.query;
-  } else if (c === 47) {
-    this.state = "relative slash";
-  } else if (c === 63) {
-    this.url.username = this.base.username;
-    this.url.password = this.base.password;
-    this.url.host = this.base.host;
-    this.url.port = this.base.port;
-    this.url.path = this.base.path.slice();
-    this.url.query = "";
-    this.state = "query";
-  } else if (c === 35) {
-    this.url.username = this.base.username;
-    this.url.password = this.base.password;
-    this.url.host = this.base.host;
-    this.url.port = this.base.port;
-    this.url.path = this.base.path.slice();
-    this.url.query = this.base.query;
-    this.url.fragment = "";
-    this.state = "fragment";
-  } else if (isSpecial(this.url) && c === 92) {
-    this.parseError = true;
-    this.state = "relative slash";
-  } else {
-    this.url.username = this.base.username;
-    this.url.password = this.base.password;
-    this.url.host = this.base.host;
-    this.url.port = this.base.port;
-    this.url.path = this.base.path.slice(0, this.base.path.length - 1);
-
-    this.state = "path";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse relative slash"] = function parseRelativeSlash(c) {
-  if (isSpecial(this.url) && (c === 47 || c === 92)) {
-    if (c === 92) {
-      this.parseError = true;
-    }
-    this.state = "special authority ignore slashes";
-  } else if (c === 47) {
-    this.state = "authority";
-  } else {
-    this.url.username = this.base.username;
-    this.url.password = this.base.password;
-    this.url.host = this.base.host;
-    this.url.port = this.base.port;
-    this.state = "path";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse special authority slashes"] = function parseSpecialAuthoritySlashes(c) {
-  if (c === 47 && this.input[this.pointer + 1] === 47) {
-    this.state = "special authority ignore slashes";
-    ++this.pointer;
-  } else {
-    this.parseError = true;
-    this.state = "special authority ignore slashes";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse special authority ignore slashes"] = function parseSpecialAuthorityIgnoreSlashes(c) {
-  if (c !== 47 && c !== 92) {
-    this.state = "authority";
-    --this.pointer;
-  } else {
-    this.parseError = true;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse authority"] = function parseAuthority(c, cStr) {
-  if (c === 64) {
-    this.parseError = true;
-    if (this.atFlag) {
-      this.buffer = "%40" + this.buffer;
-    }
-    this.atFlag = true;
-
-    // careful, this is based on buffer and has its own pointer (this.pointer != pointer) and inner chars
-    const len = countSymbols(this.buffer);
-    for (let pointer = 0; pointer < len; ++pointer) {
-      const codePoint = this.buffer.codePointAt(pointer);
-
-      if (codePoint === 58 && !this.passwordTokenSeenFlag) {
-        this.passwordTokenSeenFlag = true;
-        continue;
-      }
-      const encodedCodePoints = percentEncodeChar(codePoint, isUserinfoPercentEncode);
-      if (this.passwordTokenSeenFlag) {
-        this.url.password += encodedCodePoints;
-      } else {
-        this.url.username += encodedCodePoints;
-      }
-    }
-    this.buffer = "";
-  } else if (isNaN(c) || c === 47 || c === 63 || c === 35 ||
-             (isSpecial(this.url) && c === 92)) {
-    if (this.atFlag && this.buffer === "") {
-      this.parseError = true;
-      return failure;
-    }
-    this.pointer -= countSymbols(this.buffer) + 1;
-    this.buffer = "";
-    this.state = "host";
-  } else {
-    this.buffer += cStr;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse hostname"] =
-URLStateMachine.prototype["parse host"] = function parseHostName(c, cStr) {
-  if (this.stateOverride && this.url.scheme === "file") {
-    --this.pointer;
-    this.state = "file host";
-  } else if (c === 58 && !this.arrFlag) {
-    if (this.buffer === "") {
-      this.parseError = true;
-      return failure;
-    }
-
-    const host = parseHost(this.buffer, isSpecial(this.url));
-    if (host === failure) {
-      return failure;
-    }
-
-    this.url.host = host;
-    this.buffer = "";
-    this.state = "port";
-    if (this.stateOverride === "hostname") {
-      return false;
-    }
-  } else if (isNaN(c) || c === 47 || c === 63 || c === 35 ||
-             (isSpecial(this.url) && c === 92)) {
-    --this.pointer;
-    if (isSpecial(this.url) && this.buffer === "") {
-      this.parseError = true;
-      return failure;
-    } else if (this.stateOverride && this.buffer === "" &&
-               (includesCredentials(this.url) || this.url.port !== null)) {
-      this.parseError = true;
-      return false;
-    }
-
-    const host = parseHost(this.buffer, isSpecial(this.url));
-    if (host === failure) {
-      return failure;
-    }
-
-    this.url.host = host;
-    this.buffer = "";
-    this.state = "path start";
-    if (this.stateOverride) {
-      return false;
-    }
-  } else {
-    if (c === 91) {
-      this.arrFlag = true;
-    } else if (c === 93) {
-      this.arrFlag = false;
-    }
-    this.buffer += cStr;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse port"] = function parsePort(c, cStr) {
-  if (isASCIIDigit(c)) {
-    this.buffer += cStr;
-  } else if (isNaN(c) || c === 47 || c === 63 || c === 35 ||
-             (isSpecial(this.url) && c === 92) ||
-             this.stateOverride) {
-    if (this.buffer !== "") {
-      const port = parseInt(this.buffer);
-      if (port > Math.pow(2, 16) - 1) {
-        this.parseError = true;
-        return failure;
-      }
-      this.url.port = port === defaultPort(this.url.scheme) ? null : port;
-      this.buffer = "";
-    }
-    if (this.stateOverride) {
-      return false;
-    }
-    this.state = "path start";
-    --this.pointer;
-  } else {
-    this.parseError = true;
-    return failure;
-  }
-
-  return true;
-};
-
-const fileOtherwiseCodePoints = new Set([47, 92, 63, 35]);
-
-URLStateMachine.prototype["parse file"] = function parseFile(c) {
-  this.url.scheme = "file";
-
-  if (c === 47 || c === 92) {
-    if (c === 92) {
-      this.parseError = true;
-    }
-    this.state = "file slash";
-  } else if (this.base !== null && this.base.scheme === "file") {
-    if (isNaN(c)) {
-      this.url.host = this.base.host;
-      this.url.path = this.base.path.slice();
-      this.url.query = this.base.query;
-    } else if (c === 63) {
-      this.url.host = this.base.host;
-      this.url.path = this.base.path.slice();
-      this.url.query = "";
-      this.state = "query";
-    } else if (c === 35) {
-      this.url.host = this.base.host;
-      this.url.path = this.base.path.slice();
-      this.url.query = this.base.query;
-      this.url.fragment = "";
-      this.state = "fragment";
-    } else {
-      if (this.input.length - this.pointer - 1 === 0 || // remaining consists of 0 code points
-          !isWindowsDriveLetterCodePoints(c, this.input[this.pointer + 1]) ||
-          (this.input.length - this.pointer - 1 >= 2 && // remaining has at least 2 code points
-           !fileOtherwiseCodePoints.has(this.input[this.pointer + 2]))) {
-        this.url.host = this.base.host;
-        this.url.path = this.base.path.slice();
-        shortenPath(this.url);
-      } else {
-        this.parseError = true;
-      }
-
-      this.state = "path";
-      --this.pointer;
-    }
-  } else {
-    this.state = "path";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse file slash"] = function parseFileSlash(c) {
-  if (c === 47 || c === 92) {
-    if (c === 92) {
-      this.parseError = true;
-    }
-    this.state = "file host";
-  } else {
-    if (this.base !== null && this.base.scheme === "file") {
-      if (isNormalizedWindowsDriveLetterString(this.base.path[0])) {
-        this.url.path.push(this.base.path[0]);
-      } else {
-        this.url.host = this.base.host;
-      }
-    }
-    this.state = "path";
-    --this.pointer;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse file host"] = function parseFileHost(c, cStr) {
-  if (isNaN(c) || c === 47 || c === 92 || c === 63 || c === 35) {
-    --this.pointer;
-    if (!this.stateOverride && isWindowsDriveLetterString(this.buffer)) {
-      this.parseError = true;
-      this.state = "path";
-    } else if (this.buffer === "") {
-      this.url.host = "";
-      if (this.stateOverride) {
-        return false;
-      }
-      this.state = "path start";
-    } else {
-      let host = parseHost(this.buffer, isSpecial(this.url));
-      if (host === failure) {
-        return failure;
-      }
-      if (host === "localhost") {
-        host = "";
-      }
-      this.url.host = host;
-
-      if (this.stateOverride) {
-        return false;
-      }
-
-      this.buffer = "";
-      this.state = "path start";
-    }
-  } else {
-    this.buffer += cStr;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse path start"] = function parsePathStart(c) {
-  if (isSpecial(this.url)) {
-    if (c === 92) {
-      this.parseError = true;
-    }
-    this.state = "path";
-
-    if (c !== 47 && c !== 92) {
-      --this.pointer;
-    }
-  } else if (!this.stateOverride && c === 63) {
-    this.url.query = "";
-    this.state = "query";
-  } else if (!this.stateOverride && c === 35) {
-    this.url.fragment = "";
-    this.state = "fragment";
-  } else if (c !== undefined) {
-    this.state = "path";
-    if (c !== 47) {
-      --this.pointer;
-    }
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse path"] = function parsePath(c) {
-  if (isNaN(c) || c === 47 || (isSpecial(this.url) && c === 92) ||
-      (!this.stateOverride && (c === 63 || c === 35))) {
-    if (isSpecial(this.url) && c === 92) {
-      this.parseError = true;
-    }
-
-    if (isDoubleDot(this.buffer)) {
-      shortenPath(this.url);
-      if (c !== 47 && !(isSpecial(this.url) && c === 92)) {
-        this.url.path.push("");
-      }
-    } else if (isSingleDot(this.buffer) && c !== 47 &&
-               !(isSpecial(this.url) && c === 92)) {
-      this.url.path.push("");
-    } else if (!isSingleDot(this.buffer)) {
-      if (this.url.scheme === "file" && this.url.path.length === 0 && isWindowsDriveLetterString(this.buffer)) {
-        if (this.url.host !== "" && this.url.host !== null) {
-          this.parseError = true;
-          this.url.host = "";
-        }
-        this.buffer = this.buffer[0] + ":";
-      }
-      this.url.path.push(this.buffer);
-    }
-    this.buffer = "";
-    if (this.url.scheme === "file" && (c === undefined || c === 63 || c === 35)) {
-      while (this.url.path.length > 1 && this.url.path[0] === "") {
-        this.parseError = true;
-        this.url.path.shift();
-      }
-    }
-    if (c === 63) {
-      this.url.query = "";
-      this.state = "query";
-    }
-    if (c === 35) {
-      this.url.fragment = "";
-      this.state = "fragment";
-    }
-  } else {
-    // TODO: If c is not a URL code point and not "%", parse error.
-
-    if (c === 37 &&
-      (!isASCIIHex(this.input[this.pointer + 1]) ||
-        !isASCIIHex(this.input[this.pointer + 2]))) {
-      this.parseError = true;
-    }
-
-    this.buffer += percentEncodeChar(c, isPathPercentEncode);
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse cannot-be-a-base-URL path"] = function parseCannotBeABaseURLPath(c) {
-  if (c === 63) {
-    this.url.query = "";
-    this.state = "query";
-  } else if (c === 35) {
-    this.url.fragment = "";
-    this.state = "fragment";
-  } else {
-    // TODO: Add: not a URL code point
-    if (!isNaN(c) && c !== 37) {
-      this.parseError = true;
-    }
-
-    if (c === 37 &&
-        (!isASCIIHex(this.input[this.pointer + 1]) ||
-         !isASCIIHex(this.input[this.pointer + 2]))) {
-      this.parseError = true;
-    }
-
-    if (!isNaN(c)) {
-      this.url.path[0] = this.url.path[0] + percentEncodeChar(c, isC0ControlPercentEncode);
-    }
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse query"] = function parseQuery(c, cStr) {
-  if (isNaN(c) || (!this.stateOverride && c === 35)) {
-    if (!isSpecial(this.url) || this.url.scheme === "ws" || this.url.scheme === "wss") {
-      this.encodingOverride = "utf-8";
-    }
-
-    const buffer = new Buffer(this.buffer); // TODO: Use encoding override instead
-    for (let i = 0; i < buffer.length; ++i) {
-      if (buffer[i] < 0x21 || buffer[i] > 0x7E || buffer[i] === 0x22 || buffer[i] === 0x23 ||
-          buffer[i] === 0x3C || buffer[i] === 0x3E) {
-        this.url.query += percentEncode(buffer[i]);
-      } else {
-        this.url.query += String.fromCodePoint(buffer[i]);
-      }
-    }
-
-    this.buffer = "";
-    if (c === 35) {
-      this.url.fragment = "";
-      this.state = "fragment";
-    }
-  } else {
-    // TODO: If c is not a URL code point and not "%", parse error.
-    if (c === 37 &&
-      (!isASCIIHex(this.input[this.pointer + 1]) ||
-        !isASCIIHex(this.input[this.pointer + 2]))) {
-      this.parseError = true;
-    }
-
-    this.buffer += cStr;
-  }
-
-  return true;
-};
-
-URLStateMachine.prototype["parse fragment"] = function parseFragment(c) {
-  if (isNaN(c)) { // do nothing
-  } else if (c === 0x0) {
-    this.parseError = true;
-  } else {
-    // TODO: If c is not a URL code point and not "%", parse error.
-    if (c === 37 &&
-      (!isASCIIHex(this.input[this.pointer + 1]) ||
-        !isASCIIHex(this.input[this.pointer + 2]))) {
-      this.parseError = true;
-    }
-
-    this.url.fragment += percentEncodeChar(c, isC0ControlPercentEncode);
-  }
-
-  return true;
-};
-
-function serializeURL(url, excludeFragment) {
-  let output = url.scheme + ":";
-  if (url.host !== null) {
-    output += "//";
-
-    if (url.username !== "" || url.password !== "") {
-      output += url.username;
-      if (url.password !== "") {
-        output += ":" + url.password;
-      }
-      output += "@";
-    }
-
-    output += serializeHost(url.host);
-
-    if (url.port !== null) {
-      output += ":" + url.port;
-    }
-  } else if (url.host === null && url.scheme === "file") {
-    output += "//";
-  }
-
-  if (url.cannotBeABaseURL) {
-    output += url.path[0];
-  } else {
-    for (const string of url.path) {
-      output += "/" + string;
-    }
-  }
-
-  if (url.query !== null) {
-    output += "?" + url.query;
-  }
-
-  if (!excludeFragment && url.fragment !== null) {
-    output += "#" + url.fragment;
-  }
-
-  return output;
-}
-
-function serializeOrigin(tuple) {
-  let result = tuple.scheme + "://";
-  result += serializeHost(tuple.host);
-
-  if (tuple.port !== null) {
-    result += ":" + tuple.port;
-  }
-
-  return result;
-}
-
-module.exports.serializeURL = serializeURL;
-
-module.exports.serializeURLOrigin = function (url) {
-  // https://url.spec.whatwg.org/#concept-url-origin
-  switch (url.scheme) {
-    case "blob":
-      try {
-        return module.exports.serializeURLOrigin(module.exports.parseURL(url.path[0]));
-      } catch (e) {
-        // serializing an opaque origin returns "null"
-        return "null";
-      }
-    case "ftp":
-    case "gopher":
-    case "http":
-    case "https":
-    case "ws":
-    case "wss":
-      return serializeOrigin({
-        scheme: url.scheme,
-        host: url.host,
-        port: url.port
-      });
-    case "file":
-      // spec says "exercise to the reader", chrome says "file://"
-      return "file://";
-    default:
-      // serializing an opaque origin returns "null"
-      return "null";
-  }
-};
-
-module.exports.basicURLParse = function (input, options) {
-  if (options === undefined) {
-    options = {};
-  }
-
-  const usm = new URLStateMachine(input, options.baseURL, options.encodingOverride, options.url, options.stateOverride);
-  if (usm.failure) {
-    return "failure";
-  }
-
-  return usm.url;
-};
-
-module.exports.setTheUsername = function (url, username) {
-  url.username = "";
-  const decoded = punycode.ucs2.decode(username);
-  for (let i = 0; i < decoded.length; ++i) {
-    url.username += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
-  }
-};
-
-module.exports.setThePassword = function (url, password) {
-  url.password = "";
-  const decoded = punycode.ucs2.decode(password);
-  for (let i = 0; i < decoded.length; ++i) {
-    url.password += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
-  }
-};
-
-module.exports.serializeHost = serializeHost;
-
-module.exports.cannotHaveAUsernamePasswordPort = cannotHaveAUsernamePasswordPort;
-
-module.exports.serializeInteger = function (integer) {
-  return String(integer);
-};
-
-module.exports.parseURL = function (input, options) {
-  if (options === undefined) {
-    options = {};
-  }
-
-  // We don't handle blobs, so this just delegates:
-  return module.exports.basicURLParse(input, { baseURL: options.baseURL, encodingOverride: options.encodingOverride });
-};
-
-
-/***/ }),
-
-/***/ 60276:
-/***/ ((module) => {
-
-"use strict";
-
-
-module.exports.mixin = function mixin(target, source) {
-  const keys = Object.getOwnPropertyNames(source);
-  for (let i = 0; i < keys.length; ++i) {
-    Object.defineProperty(target, keys[i], Object.getOwnPropertyDescriptor(source, keys[i]));
-  }
-};
-
-module.exports.wrapperSymbol = Symbol("wrapper");
-module.exports.implSymbol = Symbol("impl");
-
-module.exports.wrapperForImpl = function (impl) {
-  return impl[module.exports.wrapperSymbol];
-};
-
-module.exports.implForWrapper = function (wrapper) {
-  return wrapper[module.exports.implSymbol];
-};
-
 
 
 /***/ }),
@@ -77505,6 +76899,584 @@ module.exports = {
 
 /***/ }),
 
+/***/ 84256:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var punycode = __nccwpck_require__(85477);
+var mappingTable = __nccwpck_require__(72020);
+
+var PROCESSING_OPTIONS = {
+  TRANSITIONAL: 0,
+  NONTRANSITIONAL: 1
+};
+
+function normalize(str) { // fix bug in v8
+  return str.split('\u0000').map(function (s) { return s.normalize('NFC'); }).join('\u0000');
+}
+
+function findStatus(val) {
+  var start = 0;
+  var end = mappingTable.length - 1;
+
+  while (start <= end) {
+    var mid = Math.floor((start + end) / 2);
+
+    var target = mappingTable[mid];
+    if (target[0][0] <= val && target[0][1] >= val) {
+      return target;
+    } else if (target[0][0] > val) {
+      end = mid - 1;
+    } else {
+      start = mid + 1;
+    }
+  }
+
+  return null;
+}
+
+var regexAstralSymbols = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
+
+function countSymbols(string) {
+  return string
+    // replace every surrogate pair with a BMP symbol
+    .replace(regexAstralSymbols, '_')
+    // then get the length
+    .length;
+}
+
+function mapChars(domain_name, useSTD3, processing_option) {
+  var hasError = false;
+  var processed = "";
+
+  var len = countSymbols(domain_name);
+  for (var i = 0; i < len; ++i) {
+    var codePoint = domain_name.codePointAt(i);
+    var status = findStatus(codePoint);
+
+    switch (status[1]) {
+      case "disallowed":
+        hasError = true;
+        processed += String.fromCodePoint(codePoint);
+        break;
+      case "ignored":
+        break;
+      case "mapped":
+        processed += String.fromCodePoint.apply(String, status[2]);
+        break;
+      case "deviation":
+        if (processing_option === PROCESSING_OPTIONS.TRANSITIONAL) {
+          processed += String.fromCodePoint.apply(String, status[2]);
+        } else {
+          processed += String.fromCodePoint(codePoint);
+        }
+        break;
+      case "valid":
+        processed += String.fromCodePoint(codePoint);
+        break;
+      case "disallowed_STD3_mapped":
+        if (useSTD3) {
+          hasError = true;
+          processed += String.fromCodePoint(codePoint);
+        } else {
+          processed += String.fromCodePoint.apply(String, status[2]);
+        }
+        break;
+      case "disallowed_STD3_valid":
+        if (useSTD3) {
+          hasError = true;
+        }
+
+        processed += String.fromCodePoint(codePoint);
+        break;
+    }
+  }
+
+  return {
+    string: processed,
+    error: hasError
+  };
+}
+
+var combiningMarksRegex = /[\u0300-\u036F\u0483-\u0489\u0591-\u05BD\u05BF\u05C1\u05C2\u05C4\u05C5\u05C7\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED\u0711\u0730-\u074A\u07A6-\u07B0\u07EB-\u07F3\u0816-\u0819\u081B-\u0823\u0825-\u0827\u0829-\u082D\u0859-\u085B\u08E4-\u0903\u093A-\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963\u0981-\u0983\u09BC\u09BE-\u09C4\u09C7\u09C8\u09CB-\u09CD\u09D7\u09E2\u09E3\u0A01-\u0A03\u0A3C\u0A3E-\u0A42\u0A47\u0A48\u0A4B-\u0A4D\u0A51\u0A70\u0A71\u0A75\u0A81-\u0A83\u0ABC\u0ABE-\u0AC5\u0AC7-\u0AC9\u0ACB-\u0ACD\u0AE2\u0AE3\u0B01-\u0B03\u0B3C\u0B3E-\u0B44\u0B47\u0B48\u0B4B-\u0B4D\u0B56\u0B57\u0B62\u0B63\u0B82\u0BBE-\u0BC2\u0BC6-\u0BC8\u0BCA-\u0BCD\u0BD7\u0C00-\u0C03\u0C3E-\u0C44\u0C46-\u0C48\u0C4A-\u0C4D\u0C55\u0C56\u0C62\u0C63\u0C81-\u0C83\u0CBC\u0CBE-\u0CC4\u0CC6-\u0CC8\u0CCA-\u0CCD\u0CD5\u0CD6\u0CE2\u0CE3\u0D01-\u0D03\u0D3E-\u0D44\u0D46-\u0D48\u0D4A-\u0D4D\u0D57\u0D62\u0D63\u0D82\u0D83\u0DCA\u0DCF-\u0DD4\u0DD6\u0DD8-\u0DDF\u0DF2\u0DF3\u0E31\u0E34-\u0E3A\u0E47-\u0E4E\u0EB1\u0EB4-\u0EB9\u0EBB\u0EBC\u0EC8-\u0ECD\u0F18\u0F19\u0F35\u0F37\u0F39\u0F3E\u0F3F\u0F71-\u0F84\u0F86\u0F87\u0F8D-\u0F97\u0F99-\u0FBC\u0FC6\u102B-\u103E\u1056-\u1059\u105E-\u1060\u1062-\u1064\u1067-\u106D\u1071-\u1074\u1082-\u108D\u108F\u109A-\u109D\u135D-\u135F\u1712-\u1714\u1732-\u1734\u1752\u1753\u1772\u1773\u17B4-\u17D3\u17DD\u180B-\u180D\u18A9\u1920-\u192B\u1930-\u193B\u19B0-\u19C0\u19C8\u19C9\u1A17-\u1A1B\u1A55-\u1A5E\u1A60-\u1A7C\u1A7F\u1AB0-\u1ABE\u1B00-\u1B04\u1B34-\u1B44\u1B6B-\u1B73\u1B80-\u1B82\u1BA1-\u1BAD\u1BE6-\u1BF3\u1C24-\u1C37\u1CD0-\u1CD2\u1CD4-\u1CE8\u1CED\u1CF2-\u1CF4\u1CF8\u1CF9\u1DC0-\u1DF5\u1DFC-\u1DFF\u20D0-\u20F0\u2CEF-\u2CF1\u2D7F\u2DE0-\u2DFF\u302A-\u302F\u3099\u309A\uA66F-\uA672\uA674-\uA67D\uA69F\uA6F0\uA6F1\uA802\uA806\uA80B\uA823-\uA827\uA880\uA881\uA8B4-\uA8C4\uA8E0-\uA8F1\uA926-\uA92D\uA947-\uA953\uA980-\uA983\uA9B3-\uA9C0\uA9E5\uAA29-\uAA36\uAA43\uAA4C\uAA4D\uAA7B-\uAA7D\uAAB0\uAAB2-\uAAB4\uAAB7\uAAB8\uAABE\uAABF\uAAC1\uAAEB-\uAAEF\uAAF5\uAAF6\uABE3-\uABEA\uABEC\uABED\uFB1E\uFE00-\uFE0F\uFE20-\uFE2D]|\uD800[\uDDFD\uDEE0\uDF76-\uDF7A]|\uD802[\uDE01-\uDE03\uDE05\uDE06\uDE0C-\uDE0F\uDE38-\uDE3A\uDE3F\uDEE5\uDEE6]|\uD804[\uDC00-\uDC02\uDC38-\uDC46\uDC7F-\uDC82\uDCB0-\uDCBA\uDD00-\uDD02\uDD27-\uDD34\uDD73\uDD80-\uDD82\uDDB3-\uDDC0\uDE2C-\uDE37\uDEDF-\uDEEA\uDF01-\uDF03\uDF3C\uDF3E-\uDF44\uDF47\uDF48\uDF4B-\uDF4D\uDF57\uDF62\uDF63\uDF66-\uDF6C\uDF70-\uDF74]|\uD805[\uDCB0-\uDCC3\uDDAF-\uDDB5\uDDB8-\uDDC0\uDE30-\uDE40\uDEAB-\uDEB7]|\uD81A[\uDEF0-\uDEF4\uDF30-\uDF36]|\uD81B[\uDF51-\uDF7E\uDF8F-\uDF92]|\uD82F[\uDC9D\uDC9E]|\uD834[\uDD65-\uDD69\uDD6D-\uDD72\uDD7B-\uDD82\uDD85-\uDD8B\uDDAA-\uDDAD\uDE42-\uDE44]|\uD83A[\uDCD0-\uDCD6]|\uDB40[\uDD00-\uDDEF]/;
+
+function validateLabel(label, processing_option) {
+  if (label.substr(0, 4) === "xn--") {
+    label = punycode.toUnicode(label);
+    processing_option = PROCESSING_OPTIONS.NONTRANSITIONAL;
+  }
+
+  var error = false;
+
+  if (normalize(label) !== label ||
+      (label[3] === "-" && label[4] === "-") ||
+      label[0] === "-" || label[label.length - 1] === "-" ||
+      label.indexOf(".") !== -1 ||
+      label.search(combiningMarksRegex) === 0) {
+    error = true;
+  }
+
+  var len = countSymbols(label);
+  for (var i = 0; i < len; ++i) {
+    var status = findStatus(label.codePointAt(i));
+    if ((processing === PROCESSING_OPTIONS.TRANSITIONAL && status[1] !== "valid") ||
+        (processing === PROCESSING_OPTIONS.NONTRANSITIONAL &&
+         status[1] !== "valid" && status[1] !== "deviation")) {
+      error = true;
+      break;
+    }
+  }
+
+  return {
+    label: label,
+    error: error
+  };
+}
+
+function processing(domain_name, useSTD3, processing_option) {
+  var result = mapChars(domain_name, useSTD3, processing_option);
+  result.string = normalize(result.string);
+
+  var labels = result.string.split(".");
+  for (var i = 0; i < labels.length; ++i) {
+    try {
+      var validation = validateLabel(labels[i]);
+      labels[i] = validation.label;
+      result.error = result.error || validation.error;
+    } catch(e) {
+      result.error = true;
+    }
+  }
+
+  return {
+    string: labels.join("."),
+    error: result.error
+  };
+}
+
+module.exports.toASCII = function(domain_name, useSTD3, processing_option, verifyDnsLength) {
+  var result = processing(domain_name, useSTD3, processing_option);
+  var labels = result.string.split(".");
+  labels = labels.map(function(l) {
+    try {
+      return punycode.toASCII(l);
+    } catch(e) {
+      result.error = true;
+      return l;
+    }
+  });
+
+  if (verifyDnsLength) {
+    var total = labels.slice(0, labels.length - 1).join(".").length;
+    if (total.length > 253 || total.length === 0) {
+      result.error = true;
+    }
+
+    for (var i=0; i < labels.length; ++i) {
+      if (labels.length > 63 || labels.length === 0) {
+        result.error = true;
+        break;
+      }
+    }
+  }
+
+  if (result.error) return null;
+  return labels.join(".");
+};
+
+module.exports.toUnicode = function(domain_name, useSTD3) {
+  var result = processing(domain_name, useSTD3, PROCESSING_OPTIONS.NONTRANSITIONAL);
+
+  return {
+    domain: result.string,
+    error: result.error
+  };
+};
+
+module.exports.PROCESSING_OPTIONS = PROCESSING_OPTIONS;
+
+
+/***/ }),
+
+/***/ 4351:
+/***/ ((module) => {
+
+/******************************************************************************
+Copyright (c) Microsoft Corporation.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+***************************************************************************** */
+/* global global, define, System, Reflect, Promise */
+var __extends;
+var __assign;
+var __rest;
+var __decorate;
+var __param;
+var __esDecorate;
+var __runInitializers;
+var __propKey;
+var __setFunctionName;
+var __metadata;
+var __awaiter;
+var __generator;
+var __exportStar;
+var __values;
+var __read;
+var __spread;
+var __spreadArrays;
+var __spreadArray;
+var __await;
+var __asyncGenerator;
+var __asyncDelegator;
+var __asyncValues;
+var __makeTemplateObject;
+var __importStar;
+var __importDefault;
+var __classPrivateFieldGet;
+var __classPrivateFieldSet;
+var __classPrivateFieldIn;
+var __createBinding;
+(function (factory) {
+    var root = typeof global === "object" ? global : typeof self === "object" ? self : typeof this === "object" ? this : {};
+    if (typeof define === "function" && define.amd) {
+        define("tslib", ["exports"], function (exports) { factory(createExporter(root, createExporter(exports))); });
+    }
+    else if ( true && typeof module.exports === "object") {
+        factory(createExporter(root, createExporter(module.exports)));
+    }
+    else {
+        factory(createExporter(root));
+    }
+    function createExporter(exports, previous) {
+        if (exports !== root) {
+            if (typeof Object.create === "function") {
+                Object.defineProperty(exports, "__esModule", { value: true });
+            }
+            else {
+                exports.__esModule = true;
+            }
+        }
+        return function (id, v) { return exports[id] = previous ? previous(id, v) : v; };
+    }
+})
+(function (exporter) {
+    var extendStatics = Object.setPrototypeOf ||
+        ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+        function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+
+    __extends = function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+
+    __assign = Object.assign || function (t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p)) t[p] = s[p];
+        }
+        return t;
+    };
+
+    __rest = function (s, e) {
+        var t = {};
+        for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+            t[p] = s[p];
+        if (s != null && typeof Object.getOwnPropertySymbols === "function")
+            for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+                if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                    t[p[i]] = s[p[i]];
+            }
+        return t;
+    };
+
+    __decorate = function (decorators, target, key, desc) {
+        var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+        if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+        else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+        return c > 3 && r && Object.defineProperty(target, key, r), r;
+    };
+
+    __param = function (paramIndex, decorator) {
+        return function (target, key) { decorator(target, key, paramIndex); }
+    };
+
+    __esDecorate = function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+        function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+        var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+        var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+        var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+        var _, done = false;
+        for (var i = decorators.length - 1; i >= 0; i--) {
+            var context = {};
+            for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+            for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+            context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+            var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+            if (kind === "accessor") {
+                if (result === void 0) continue;
+                if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+                if (_ = accept(result.get)) descriptor.get = _;
+                if (_ = accept(result.set)) descriptor.set = _;
+                if (_ = accept(result.init)) initializers.push(_);
+            }
+            else if (_ = accept(result)) {
+                if (kind === "field") initializers.push(_);
+                else descriptor[key] = _;
+            }
+        }
+        if (target) Object.defineProperty(target, contextIn.name, descriptor);
+        done = true;
+    };
+
+    __runInitializers = function (thisArg, initializers, value) {
+        var useValue = arguments.length > 2;
+        for (var i = 0; i < initializers.length; i++) {
+            value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+        }
+        return useValue ? value : void 0;
+    };
+
+    __propKey = function (x) {
+        return typeof x === "symbol" ? x : "".concat(x);
+    };
+
+    __setFunctionName = function (f, name, prefix) {
+        if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+        return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+    };
+
+    __metadata = function (metadataKey, metadataValue) {
+        if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(metadataKey, metadataValue);
+    };
+
+    __awaiter = function (thisArg, _arguments, P, generator) {
+        function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+        return new (P || (P = Promise))(function (resolve, reject) {
+            function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+            function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+            function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+            step((generator = generator.apply(thisArg, _arguments || [])).next());
+        });
+    };
+
+    __generator = function (thisArg, body) {
+        var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
+        return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+        function verb(n) { return function (v) { return step([n, v]); }; }
+        function step(op) {
+            if (f) throw new TypeError("Generator is already executing.");
+            while (g && (g = 0, op[0] && (_ = 0)), _) try {
+                if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+                if (y = 0, t) op = [op[0] & 2, t.value];
+                switch (op[0]) {
+                    case 0: case 1: t = op; break;
+                    case 4: _.label++; return { value: op[1], done: false };
+                    case 5: _.label++; y = op[1]; op = [0]; continue;
+                    case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                    default:
+                        if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                        if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                        if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                        if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                        if (t[2]) _.ops.pop();
+                        _.trys.pop(); continue;
+                }
+                op = body.call(thisArg, _);
+            } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+            if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+        }
+    };
+
+    __exportStar = function(m, o) {
+        for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(o, p)) __createBinding(o, m, p);
+    };
+
+    __createBinding = Object.create ? (function(o, m, k, k2) {
+        if (k2 === undefined) k2 = k;
+        var desc = Object.getOwnPropertyDescriptor(m, k);
+        if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+            desc = { enumerable: true, get: function() { return m[k]; } };
+        }
+        Object.defineProperty(o, k2, desc);
+    }) : (function(o, m, k, k2) {
+        if (k2 === undefined) k2 = k;
+        o[k2] = m[k];
+    });
+
+    __values = function (o) {
+        var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
+        if (m) return m.call(o);
+        if (o && typeof o.length === "number") return {
+            next: function () {
+                if (o && i >= o.length) o = void 0;
+                return { value: o && o[i++], done: !o };
+            }
+        };
+        throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
+    };
+
+    __read = function (o, n) {
+        var m = typeof Symbol === "function" && o[Symbol.iterator];
+        if (!m) return o;
+        var i = m.call(o), r, ar = [], e;
+        try {
+            while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
+        }
+        catch (error) { e = { error: error }; }
+        finally {
+            try {
+                if (r && !r.done && (m = i["return"])) m.call(i);
+            }
+            finally { if (e) throw e.error; }
+        }
+        return ar;
+    };
+
+    /** @deprecated */
+    __spread = function () {
+        for (var ar = [], i = 0; i < arguments.length; i++)
+            ar = ar.concat(__read(arguments[i]));
+        return ar;
+    };
+
+    /** @deprecated */
+    __spreadArrays = function () {
+        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+        for (var r = Array(s), k = 0, i = 0; i < il; i++)
+            for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+                r[k] = a[j];
+        return r;
+    };
+
+    __spreadArray = function (to, from, pack) {
+        if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+            if (ar || !(i in from)) {
+                if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+                ar[i] = from[i];
+            }
+        }
+        return to.concat(ar || Array.prototype.slice.call(from));
+    };
+
+    __await = function (v) {
+        return this instanceof __await ? (this.v = v, this) : new __await(v);
+    };
+
+    __asyncGenerator = function (thisArg, _arguments, generator) {
+        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+        var g = generator.apply(thisArg, _arguments || []), i, q = [];
+        return i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i;
+        function verb(n) { if (g[n]) i[n] = function (v) { return new Promise(function (a, b) { q.push([n, v, a, b]) > 1 || resume(n, v); }); }; }
+        function resume(n, v) { try { step(g[n](v)); } catch (e) { settle(q[0][3], e); } }
+        function step(r) { r.value instanceof __await ? Promise.resolve(r.value.v).then(fulfill, reject) : settle(q[0][2], r);  }
+        function fulfill(value) { resume("next", value); }
+        function reject(value) { resume("throw", value); }
+        function settle(f, v) { if (f(v), q.shift(), q.length) resume(q[0][0], q[0][1]); }
+    };
+
+    __asyncDelegator = function (o) {
+        var i, p;
+        return i = {}, verb("next"), verb("throw", function (e) { throw e; }), verb("return"), i[Symbol.iterator] = function () { return this; }, i;
+        function verb(n, f) { i[n] = o[n] ? function (v) { return (p = !p) ? { value: __await(o[n](v)), done: false } : f ? f(v) : v; } : f; }
+    };
+
+    __asyncValues = function (o) {
+        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+        var m = o[Symbol.asyncIterator], i;
+        return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+        function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+        function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
+    };
+
+    __makeTemplateObject = function (cooked, raw) {
+        if (Object.defineProperty) { Object.defineProperty(cooked, "raw", { value: raw }); } else { cooked.raw = raw; }
+        return cooked;
+    };
+
+    var __setModuleDefault = Object.create ? (function(o, v) {
+        Object.defineProperty(o, "default", { enumerable: true, value: v });
+    }) : function(o, v) {
+        o["default"] = v;
+    };
+
+    __importStar = function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+
+    __importDefault = function (mod) {
+        return (mod && mod.__esModule) ? mod : { "default": mod };
+    };
+
+    __classPrivateFieldGet = function (receiver, state, kind, f) {
+        if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+        if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+        return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+    };
+
+    __classPrivateFieldSet = function (receiver, state, value, kind, f) {
+        if (kind === "m") throw new TypeError("Private method is not writable");
+        if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+        if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+        return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+    };
+
+    __classPrivateFieldIn = function (state, receiver) {
+        if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) throw new TypeError("Cannot use 'in' operator on non-object");
+        return typeof state === "function" ? receiver === state : state.has(receiver);
+    };
+
+    exporter("__extends", __extends);
+    exporter("__assign", __assign);
+    exporter("__rest", __rest);
+    exporter("__decorate", __decorate);
+    exporter("__param", __param);
+    exporter("__esDecorate", __esDecorate);
+    exporter("__runInitializers", __runInitializers);
+    exporter("__propKey", __propKey);
+    exporter("__setFunctionName", __setFunctionName);
+    exporter("__metadata", __metadata);
+    exporter("__awaiter", __awaiter);
+    exporter("__generator", __generator);
+    exporter("__exportStar", __exportStar);
+    exporter("__createBinding", __createBinding);
+    exporter("__values", __values);
+    exporter("__read", __read);
+    exporter("__spread", __spread);
+    exporter("__spreadArrays", __spreadArrays);
+    exporter("__spreadArray", __spreadArray);
+    exporter("__await", __await);
+    exporter("__asyncGenerator", __asyncGenerator);
+    exporter("__asyncDelegator", __asyncDelegator);
+    exporter("__asyncValues", __asyncValues);
+    exporter("__makeTemplateObject", __makeTemplateObject);
+    exporter("__importStar", __importStar);
+    exporter("__importDefault", __importDefault);
+    exporter("__classPrivateFieldGet", __classPrivateFieldGet);
+    exporter("__classPrivateFieldSet", __classPrivateFieldSet);
+    exporter("__classPrivateFieldIn", __classPrivateFieldIn);
+});
+
+
+/***/ }),
+
 /***/ 74294:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -78457,6 +78429,1967 @@ exports["default"] = _default;
 
 /***/ }),
 
+/***/ 54886:
+/***/ ((module) => {
+
+"use strict";
+
+
+var conversions = {};
+module.exports = conversions;
+
+function sign(x) {
+    return x < 0 ? -1 : 1;
+}
+
+function evenRound(x) {
+    // Round x to the nearest integer, choosing the even integer if it lies halfway between two.
+    if ((x % 1) === 0.5 && (x & 1) === 0) { // [even number].5; round down (i.e. floor)
+        return Math.floor(x);
+    } else {
+        return Math.round(x);
+    }
+}
+
+function createNumberConversion(bitLength, typeOpts) {
+    if (!typeOpts.unsigned) {
+        --bitLength;
+    }
+    const lowerBound = typeOpts.unsigned ? 0 : -Math.pow(2, bitLength);
+    const upperBound = Math.pow(2, bitLength) - 1;
+
+    const moduloVal = typeOpts.moduloBitLength ? Math.pow(2, typeOpts.moduloBitLength) : Math.pow(2, bitLength);
+    const moduloBound = typeOpts.moduloBitLength ? Math.pow(2, typeOpts.moduloBitLength - 1) : Math.pow(2, bitLength - 1);
+
+    return function(V, opts) {
+        if (!opts) opts = {};
+
+        let x = +V;
+
+        if (opts.enforceRange) {
+            if (!Number.isFinite(x)) {
+                throw new TypeError("Argument is not a finite number");
+            }
+
+            x = sign(x) * Math.floor(Math.abs(x));
+            if (x < lowerBound || x > upperBound) {
+                throw new TypeError("Argument is not in byte range");
+            }
+
+            return x;
+        }
+
+        if (!isNaN(x) && opts.clamp) {
+            x = evenRound(x);
+
+            if (x < lowerBound) x = lowerBound;
+            if (x > upperBound) x = upperBound;
+            return x;
+        }
+
+        if (!Number.isFinite(x) || x === 0) {
+            return 0;
+        }
+
+        x = sign(x) * Math.floor(Math.abs(x));
+        x = x % moduloVal;
+
+        if (!typeOpts.unsigned && x >= moduloBound) {
+            return x - moduloVal;
+        } else if (typeOpts.unsigned) {
+            if (x < 0) {
+              x += moduloVal;
+            } else if (x === -0) { // don't return negative zero
+              return 0;
+            }
+        }
+
+        return x;
+    }
+}
+
+conversions["void"] = function () {
+    return undefined;
+};
+
+conversions["boolean"] = function (val) {
+    return !!val;
+};
+
+conversions["byte"] = createNumberConversion(8, { unsigned: false });
+conversions["octet"] = createNumberConversion(8, { unsigned: true });
+
+conversions["short"] = createNumberConversion(16, { unsigned: false });
+conversions["unsigned short"] = createNumberConversion(16, { unsigned: true });
+
+conversions["long"] = createNumberConversion(32, { unsigned: false });
+conversions["unsigned long"] = createNumberConversion(32, { unsigned: true });
+
+conversions["long long"] = createNumberConversion(32, { unsigned: false, moduloBitLength: 64 });
+conversions["unsigned long long"] = createNumberConversion(32, { unsigned: true, moduloBitLength: 64 });
+
+conversions["double"] = function (V) {
+    const x = +V;
+
+    if (!Number.isFinite(x)) {
+        throw new TypeError("Argument is not a finite floating-point value");
+    }
+
+    return x;
+};
+
+conversions["unrestricted double"] = function (V) {
+    const x = +V;
+
+    if (isNaN(x)) {
+        throw new TypeError("Argument is NaN");
+    }
+
+    return x;
+};
+
+// not quite valid, but good enough for JS
+conversions["float"] = conversions["double"];
+conversions["unrestricted float"] = conversions["unrestricted double"];
+
+conversions["DOMString"] = function (V, opts) {
+    if (!opts) opts = {};
+
+    if (opts.treatNullAsEmptyString && V === null) {
+        return "";
+    }
+
+    return String(V);
+};
+
+conversions["ByteString"] = function (V, opts) {
+    const x = String(V);
+    let c = undefined;
+    for (let i = 0; (c = x.codePointAt(i)) !== undefined; ++i) {
+        if (c > 255) {
+            throw new TypeError("Argument is not a valid bytestring");
+        }
+    }
+
+    return x;
+};
+
+conversions["USVString"] = function (V) {
+    const S = String(V);
+    const n = S.length;
+    const U = [];
+    for (let i = 0; i < n; ++i) {
+        const c = S.charCodeAt(i);
+        if (c < 0xD800 || c > 0xDFFF) {
+            U.push(String.fromCodePoint(c));
+        } else if (0xDC00 <= c && c <= 0xDFFF) {
+            U.push(String.fromCodePoint(0xFFFD));
+        } else {
+            if (i === n - 1) {
+                U.push(String.fromCodePoint(0xFFFD));
+            } else {
+                const d = S.charCodeAt(i + 1);
+                if (0xDC00 <= d && d <= 0xDFFF) {
+                    const a = c & 0x3FF;
+                    const b = d & 0x3FF;
+                    U.push(String.fromCodePoint((2 << 15) + (2 << 9) * a + b));
+                    ++i;
+                } else {
+                    U.push(String.fromCodePoint(0xFFFD));
+                }
+            }
+        }
+    }
+
+    return U.join('');
+};
+
+conversions["Date"] = function (V, opts) {
+    if (!(V instanceof Date)) {
+        throw new TypeError("Argument is not a Date object");
+    }
+    if (isNaN(V)) {
+        return undefined;
+    }
+
+    return V;
+};
+
+conversions["RegExp"] = function (V, opts) {
+    if (!(V instanceof RegExp)) {
+        V = new RegExp(V);
+    }
+
+    return V;
+};
+
+
+/***/ }),
+
+/***/ 97537:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+const usm = __nccwpck_require__(2158);
+
+exports.implementation = class URLImpl {
+  constructor(constructorArgs) {
+    const url = constructorArgs[0];
+    const base = constructorArgs[1];
+
+    let parsedBase = null;
+    if (base !== undefined) {
+      parsedBase = usm.basicURLParse(base);
+      if (parsedBase === "failure") {
+        throw new TypeError("Invalid base URL");
+      }
+    }
+
+    const parsedURL = usm.basicURLParse(url, { baseURL: parsedBase });
+    if (parsedURL === "failure") {
+      throw new TypeError("Invalid URL");
+    }
+
+    this._url = parsedURL;
+
+    // TODO: query stuff
+  }
+
+  get href() {
+    return usm.serializeURL(this._url);
+  }
+
+  set href(v) {
+    const parsedURL = usm.basicURLParse(v);
+    if (parsedURL === "failure") {
+      throw new TypeError("Invalid URL");
+    }
+
+    this._url = parsedURL;
+  }
+
+  get origin() {
+    return usm.serializeURLOrigin(this._url);
+  }
+
+  get protocol() {
+    return this._url.scheme + ":";
+  }
+
+  set protocol(v) {
+    usm.basicURLParse(v + ":", { url: this._url, stateOverride: "scheme start" });
+  }
+
+  get username() {
+    return this._url.username;
+  }
+
+  set username(v) {
+    if (usm.cannotHaveAUsernamePasswordPort(this._url)) {
+      return;
+    }
+
+    usm.setTheUsername(this._url, v);
+  }
+
+  get password() {
+    return this._url.password;
+  }
+
+  set password(v) {
+    if (usm.cannotHaveAUsernamePasswordPort(this._url)) {
+      return;
+    }
+
+    usm.setThePassword(this._url, v);
+  }
+
+  get host() {
+    const url = this._url;
+
+    if (url.host === null) {
+      return "";
+    }
+
+    if (url.port === null) {
+      return usm.serializeHost(url.host);
+    }
+
+    return usm.serializeHost(url.host) + ":" + usm.serializeInteger(url.port);
+  }
+
+  set host(v) {
+    if (this._url.cannotBeABaseURL) {
+      return;
+    }
+
+    usm.basicURLParse(v, { url: this._url, stateOverride: "host" });
+  }
+
+  get hostname() {
+    if (this._url.host === null) {
+      return "";
+    }
+
+    return usm.serializeHost(this._url.host);
+  }
+
+  set hostname(v) {
+    if (this._url.cannotBeABaseURL) {
+      return;
+    }
+
+    usm.basicURLParse(v, { url: this._url, stateOverride: "hostname" });
+  }
+
+  get port() {
+    if (this._url.port === null) {
+      return "";
+    }
+
+    return usm.serializeInteger(this._url.port);
+  }
+
+  set port(v) {
+    if (usm.cannotHaveAUsernamePasswordPort(this._url)) {
+      return;
+    }
+
+    if (v === "") {
+      this._url.port = null;
+    } else {
+      usm.basicURLParse(v, { url: this._url, stateOverride: "port" });
+    }
+  }
+
+  get pathname() {
+    if (this._url.cannotBeABaseURL) {
+      return this._url.path[0];
+    }
+
+    if (this._url.path.length === 0) {
+      return "";
+    }
+
+    return "/" + this._url.path.join("/");
+  }
+
+  set pathname(v) {
+    if (this._url.cannotBeABaseURL) {
+      return;
+    }
+
+    this._url.path = [];
+    usm.basicURLParse(v, { url: this._url, stateOverride: "path start" });
+  }
+
+  get search() {
+    if (this._url.query === null || this._url.query === "") {
+      return "";
+    }
+
+    return "?" + this._url.query;
+  }
+
+  set search(v) {
+    // TODO: query stuff
+
+    const url = this._url;
+
+    if (v === "") {
+      url.query = null;
+      return;
+    }
+
+    const input = v[0] === "?" ? v.substring(1) : v;
+    url.query = "";
+    usm.basicURLParse(input, { url, stateOverride: "query" });
+  }
+
+  get hash() {
+    if (this._url.fragment === null || this._url.fragment === "") {
+      return "";
+    }
+
+    return "#" + this._url.fragment;
+  }
+
+  set hash(v) {
+    if (v === "") {
+      this._url.fragment = null;
+      return;
+    }
+
+    const input = v[0] === "#" ? v.substring(1) : v;
+    this._url.fragment = "";
+    usm.basicURLParse(input, { url: this._url, stateOverride: "fragment" });
+  }
+
+  toJSON() {
+    return this.href;
+  }
+};
+
+
+/***/ }),
+
+/***/ 63394:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const conversions = __nccwpck_require__(54886);
+const utils = __nccwpck_require__(83185);
+const Impl = __nccwpck_require__(97537);
+
+const impl = utils.implSymbol;
+
+function URL(url) {
+  if (!this || this[impl] || !(this instanceof URL)) {
+    throw new TypeError("Failed to construct 'URL': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+  }
+  if (arguments.length < 1) {
+    throw new TypeError("Failed to construct 'URL': 1 argument required, but only " + arguments.length + " present.");
+  }
+  const args = [];
+  for (let i = 0; i < arguments.length && i < 2; ++i) {
+    args[i] = arguments[i];
+  }
+  args[0] = conversions["USVString"](args[0]);
+  if (args[1] !== undefined) {
+  args[1] = conversions["USVString"](args[1]);
+  }
+
+  module.exports.setup(this, args);
+}
+
+URL.prototype.toJSON = function toJSON() {
+  if (!this || !module.exports.is(this)) {
+    throw new TypeError("Illegal invocation");
+  }
+  const args = [];
+  for (let i = 0; i < arguments.length && i < 0; ++i) {
+    args[i] = arguments[i];
+  }
+  return this[impl].toJSON.apply(this[impl], args);
+};
+Object.defineProperty(URL.prototype, "href", {
+  get() {
+    return this[impl].href;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].href = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+URL.prototype.toString = function () {
+  if (!this || !module.exports.is(this)) {
+    throw new TypeError("Illegal invocation");
+  }
+  return this.href;
+};
+
+Object.defineProperty(URL.prototype, "origin", {
+  get() {
+    return this[impl].origin;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "protocol", {
+  get() {
+    return this[impl].protocol;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].protocol = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "username", {
+  get() {
+    return this[impl].username;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].username = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "password", {
+  get() {
+    return this[impl].password;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].password = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "host", {
+  get() {
+    return this[impl].host;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].host = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "hostname", {
+  get() {
+    return this[impl].hostname;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].hostname = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "port", {
+  get() {
+    return this[impl].port;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].port = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "pathname", {
+  get() {
+    return this[impl].pathname;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].pathname = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "search", {
+  get() {
+    return this[impl].search;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].search = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+Object.defineProperty(URL.prototype, "hash", {
+  get() {
+    return this[impl].hash;
+  },
+  set(V) {
+    V = conversions["USVString"](V);
+    this[impl].hash = V;
+  },
+  enumerable: true,
+  configurable: true
+});
+
+
+module.exports = {
+  is(obj) {
+    return !!obj && obj[impl] instanceof Impl.implementation;
+  },
+  create(constructorArgs, privateData) {
+    let obj = Object.create(URL.prototype);
+    this.setup(obj, constructorArgs, privateData);
+    return obj;
+  },
+  setup(obj, constructorArgs, privateData) {
+    if (!privateData) privateData = {};
+    privateData.wrapper = obj;
+
+    obj[impl] = new Impl.implementation(constructorArgs, privateData);
+    obj[impl][utils.wrapperSymbol] = obj;
+  },
+  interface: URL,
+  expose: {
+    Window: { URL: URL },
+    Worker: { URL: URL }
+  }
+};
+
+
+
+/***/ }),
+
+/***/ 28665:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+exports.URL = __nccwpck_require__(63394)["interface"];
+exports.serializeURL = __nccwpck_require__(2158).serializeURL;
+exports.serializeURLOrigin = __nccwpck_require__(2158).serializeURLOrigin;
+exports.basicURLParse = __nccwpck_require__(2158).basicURLParse;
+exports.setTheUsername = __nccwpck_require__(2158).setTheUsername;
+exports.setThePassword = __nccwpck_require__(2158).setThePassword;
+exports.serializeHost = __nccwpck_require__(2158).serializeHost;
+exports.serializeInteger = __nccwpck_require__(2158).serializeInteger;
+exports.parseURL = __nccwpck_require__(2158).parseURL;
+
+
+/***/ }),
+
+/***/ 2158:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const punycode = __nccwpck_require__(85477);
+const tr46 = __nccwpck_require__(84256);
+
+const specialSchemes = {
+  ftp: 21,
+  file: null,
+  gopher: 70,
+  http: 80,
+  https: 443,
+  ws: 80,
+  wss: 443
+};
+
+const failure = Symbol("failure");
+
+function countSymbols(str) {
+  return punycode.ucs2.decode(str).length;
+}
+
+function at(input, idx) {
+  const c = input[idx];
+  return isNaN(c) ? undefined : String.fromCodePoint(c);
+}
+
+function isASCIIDigit(c) {
+  return c >= 0x30 && c <= 0x39;
+}
+
+function isASCIIAlpha(c) {
+  return (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A);
+}
+
+function isASCIIAlphanumeric(c) {
+  return isASCIIAlpha(c) || isASCIIDigit(c);
+}
+
+function isASCIIHex(c) {
+  return isASCIIDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
+}
+
+function isSingleDot(buffer) {
+  return buffer === "." || buffer.toLowerCase() === "%2e";
+}
+
+function isDoubleDot(buffer) {
+  buffer = buffer.toLowerCase();
+  return buffer === ".." || buffer === "%2e." || buffer === ".%2e" || buffer === "%2e%2e";
+}
+
+function isWindowsDriveLetterCodePoints(cp1, cp2) {
+  return isASCIIAlpha(cp1) && (cp2 === 58 || cp2 === 124);
+}
+
+function isWindowsDriveLetterString(string) {
+  return string.length === 2 && isASCIIAlpha(string.codePointAt(0)) && (string[1] === ":" || string[1] === "|");
+}
+
+function isNormalizedWindowsDriveLetterString(string) {
+  return string.length === 2 && isASCIIAlpha(string.codePointAt(0)) && string[1] === ":";
+}
+
+function containsForbiddenHostCodePoint(string) {
+  return string.search(/\u0000|\u0009|\u000A|\u000D|\u0020|#|%|\/|:|\?|@|\[|\\|\]/) !== -1;
+}
+
+function containsForbiddenHostCodePointExcludingPercent(string) {
+  return string.search(/\u0000|\u0009|\u000A|\u000D|\u0020|#|\/|:|\?|@|\[|\\|\]/) !== -1;
+}
+
+function isSpecialScheme(scheme) {
+  return specialSchemes[scheme] !== undefined;
+}
+
+function isSpecial(url) {
+  return isSpecialScheme(url.scheme);
+}
+
+function defaultPort(scheme) {
+  return specialSchemes[scheme];
+}
+
+function percentEncode(c) {
+  let hex = c.toString(16).toUpperCase();
+  if (hex.length === 1) {
+    hex = "0" + hex;
+  }
+
+  return "%" + hex;
+}
+
+function utf8PercentEncode(c) {
+  const buf = new Buffer(c);
+
+  let str = "";
+
+  for (let i = 0; i < buf.length; ++i) {
+    str += percentEncode(buf[i]);
+  }
+
+  return str;
+}
+
+function utf8PercentDecode(str) {
+  const input = new Buffer(str);
+  const output = [];
+  for (let i = 0; i < input.length; ++i) {
+    if (input[i] !== 37) {
+      output.push(input[i]);
+    } else if (input[i] === 37 && isASCIIHex(input[i + 1]) && isASCIIHex(input[i + 2])) {
+      output.push(parseInt(input.slice(i + 1, i + 3).toString(), 16));
+      i += 2;
+    } else {
+      output.push(input[i]);
+    }
+  }
+  return new Buffer(output).toString();
+}
+
+function isC0ControlPercentEncode(c) {
+  return c <= 0x1F || c > 0x7E;
+}
+
+const extraPathPercentEncodeSet = new Set([32, 34, 35, 60, 62, 63, 96, 123, 125]);
+function isPathPercentEncode(c) {
+  return isC0ControlPercentEncode(c) || extraPathPercentEncodeSet.has(c);
+}
+
+const extraUserinfoPercentEncodeSet =
+  new Set([47, 58, 59, 61, 64, 91, 92, 93, 94, 124]);
+function isUserinfoPercentEncode(c) {
+  return isPathPercentEncode(c) || extraUserinfoPercentEncodeSet.has(c);
+}
+
+function percentEncodeChar(c, encodeSetPredicate) {
+  const cStr = String.fromCodePoint(c);
+
+  if (encodeSetPredicate(c)) {
+    return utf8PercentEncode(cStr);
+  }
+
+  return cStr;
+}
+
+function parseIPv4Number(input) {
+  let R = 10;
+
+  if (input.length >= 2 && input.charAt(0) === "0" && input.charAt(1).toLowerCase() === "x") {
+    input = input.substring(2);
+    R = 16;
+  } else if (input.length >= 2 && input.charAt(0) === "0") {
+    input = input.substring(1);
+    R = 8;
+  }
+
+  if (input === "") {
+    return 0;
+  }
+
+  const regex = R === 10 ? /[^0-9]/ : (R === 16 ? /[^0-9A-Fa-f]/ : /[^0-7]/);
+  if (regex.test(input)) {
+    return failure;
+  }
+
+  return parseInt(input, R);
+}
+
+function parseIPv4(input) {
+  const parts = input.split(".");
+  if (parts[parts.length - 1] === "") {
+    if (parts.length > 1) {
+      parts.pop();
+    }
+  }
+
+  if (parts.length > 4) {
+    return input;
+  }
+
+  const numbers = [];
+  for (const part of parts) {
+    if (part === "") {
+      return input;
+    }
+    const n = parseIPv4Number(part);
+    if (n === failure) {
+      return input;
+    }
+
+    numbers.push(n);
+  }
+
+  for (let i = 0; i < numbers.length - 1; ++i) {
+    if (numbers[i] > 255) {
+      return failure;
+    }
+  }
+  if (numbers[numbers.length - 1] >= Math.pow(256, 5 - numbers.length)) {
+    return failure;
+  }
+
+  let ipv4 = numbers.pop();
+  let counter = 0;
+
+  for (const n of numbers) {
+    ipv4 += n * Math.pow(256, 3 - counter);
+    ++counter;
+  }
+
+  return ipv4;
+}
+
+function serializeIPv4(address) {
+  let output = "";
+  let n = address;
+
+  for (let i = 1; i <= 4; ++i) {
+    output = String(n % 256) + output;
+    if (i !== 4) {
+      output = "." + output;
+    }
+    n = Math.floor(n / 256);
+  }
+
+  return output;
+}
+
+function parseIPv6(input) {
+  const address = [0, 0, 0, 0, 0, 0, 0, 0];
+  let pieceIndex = 0;
+  let compress = null;
+  let pointer = 0;
+
+  input = punycode.ucs2.decode(input);
+
+  if (input[pointer] === 58) {
+    if (input[pointer + 1] !== 58) {
+      return failure;
+    }
+
+    pointer += 2;
+    ++pieceIndex;
+    compress = pieceIndex;
+  }
+
+  while (pointer < input.length) {
+    if (pieceIndex === 8) {
+      return failure;
+    }
+
+    if (input[pointer] === 58) {
+      if (compress !== null) {
+        return failure;
+      }
+      ++pointer;
+      ++pieceIndex;
+      compress = pieceIndex;
+      continue;
+    }
+
+    let value = 0;
+    let length = 0;
+
+    while (length < 4 && isASCIIHex(input[pointer])) {
+      value = value * 0x10 + parseInt(at(input, pointer), 16);
+      ++pointer;
+      ++length;
+    }
+
+    if (input[pointer] === 46) {
+      if (length === 0) {
+        return failure;
+      }
+
+      pointer -= length;
+
+      if (pieceIndex > 6) {
+        return failure;
+      }
+
+      let numbersSeen = 0;
+
+      while (input[pointer] !== undefined) {
+        let ipv4Piece = null;
+
+        if (numbersSeen > 0) {
+          if (input[pointer] === 46 && numbersSeen < 4) {
+            ++pointer;
+          } else {
+            return failure;
+          }
+        }
+
+        if (!isASCIIDigit(input[pointer])) {
+          return failure;
+        }
+
+        while (isASCIIDigit(input[pointer])) {
+          const number = parseInt(at(input, pointer));
+          if (ipv4Piece === null) {
+            ipv4Piece = number;
+          } else if (ipv4Piece === 0) {
+            return failure;
+          } else {
+            ipv4Piece = ipv4Piece * 10 + number;
+          }
+          if (ipv4Piece > 255) {
+            return failure;
+          }
+          ++pointer;
+        }
+
+        address[pieceIndex] = address[pieceIndex] * 0x100 + ipv4Piece;
+
+        ++numbersSeen;
+
+        if (numbersSeen === 2 || numbersSeen === 4) {
+          ++pieceIndex;
+        }
+      }
+
+      if (numbersSeen !== 4) {
+        return failure;
+      }
+
+      break;
+    } else if (input[pointer] === 58) {
+      ++pointer;
+      if (input[pointer] === undefined) {
+        return failure;
+      }
+    } else if (input[pointer] !== undefined) {
+      return failure;
+    }
+
+    address[pieceIndex] = value;
+    ++pieceIndex;
+  }
+
+  if (compress !== null) {
+    let swaps = pieceIndex - compress;
+    pieceIndex = 7;
+    while (pieceIndex !== 0 && swaps > 0) {
+      const temp = address[compress + swaps - 1];
+      address[compress + swaps - 1] = address[pieceIndex];
+      address[pieceIndex] = temp;
+      --pieceIndex;
+      --swaps;
+    }
+  } else if (compress === null && pieceIndex !== 8) {
+    return failure;
+  }
+
+  return address;
+}
+
+function serializeIPv6(address) {
+  let output = "";
+  const seqResult = findLongestZeroSequence(address);
+  const compress = seqResult.idx;
+  let ignore0 = false;
+
+  for (let pieceIndex = 0; pieceIndex <= 7; ++pieceIndex) {
+    if (ignore0 && address[pieceIndex] === 0) {
+      continue;
+    } else if (ignore0) {
+      ignore0 = false;
+    }
+
+    if (compress === pieceIndex) {
+      const separator = pieceIndex === 0 ? "::" : ":";
+      output += separator;
+      ignore0 = true;
+      continue;
+    }
+
+    output += address[pieceIndex].toString(16);
+
+    if (pieceIndex !== 7) {
+      output += ":";
+    }
+  }
+
+  return output;
+}
+
+function parseHost(input, isSpecialArg) {
+  if (input[0] === "[") {
+    if (input[input.length - 1] !== "]") {
+      return failure;
+    }
+
+    return parseIPv6(input.substring(1, input.length - 1));
+  }
+
+  if (!isSpecialArg) {
+    return parseOpaqueHost(input);
+  }
+
+  const domain = utf8PercentDecode(input);
+  const asciiDomain = tr46.toASCII(domain, false, tr46.PROCESSING_OPTIONS.NONTRANSITIONAL, false);
+  if (asciiDomain === null) {
+    return failure;
+  }
+
+  if (containsForbiddenHostCodePoint(asciiDomain)) {
+    return failure;
+  }
+
+  const ipv4Host = parseIPv4(asciiDomain);
+  if (typeof ipv4Host === "number" || ipv4Host === failure) {
+    return ipv4Host;
+  }
+
+  return asciiDomain;
+}
+
+function parseOpaqueHost(input) {
+  if (containsForbiddenHostCodePointExcludingPercent(input)) {
+    return failure;
+  }
+
+  let output = "";
+  const decoded = punycode.ucs2.decode(input);
+  for (let i = 0; i < decoded.length; ++i) {
+    output += percentEncodeChar(decoded[i], isC0ControlPercentEncode);
+  }
+  return output;
+}
+
+function findLongestZeroSequence(arr) {
+  let maxIdx = null;
+  let maxLen = 1; // only find elements > 1
+  let currStart = null;
+  let currLen = 0;
+
+  for (let i = 0; i < arr.length; ++i) {
+    if (arr[i] !== 0) {
+      if (currLen > maxLen) {
+        maxIdx = currStart;
+        maxLen = currLen;
+      }
+
+      currStart = null;
+      currLen = 0;
+    } else {
+      if (currStart === null) {
+        currStart = i;
+      }
+      ++currLen;
+    }
+  }
+
+  // if trailing zeros
+  if (currLen > maxLen) {
+    maxIdx = currStart;
+    maxLen = currLen;
+  }
+
+  return {
+    idx: maxIdx,
+    len: maxLen
+  };
+}
+
+function serializeHost(host) {
+  if (typeof host === "number") {
+    return serializeIPv4(host);
+  }
+
+  // IPv6 serializer
+  if (host instanceof Array) {
+    return "[" + serializeIPv6(host) + "]";
+  }
+
+  return host;
+}
+
+function trimControlChars(url) {
+  return url.replace(/^[\u0000-\u001F\u0020]+|[\u0000-\u001F\u0020]+$/g, "");
+}
+
+function trimTabAndNewline(url) {
+  return url.replace(/\u0009|\u000A|\u000D/g, "");
+}
+
+function shortenPath(url) {
+  const path = url.path;
+  if (path.length === 0) {
+    return;
+  }
+  if (url.scheme === "file" && path.length === 1 && isNormalizedWindowsDriveLetter(path[0])) {
+    return;
+  }
+
+  path.pop();
+}
+
+function includesCredentials(url) {
+  return url.username !== "" || url.password !== "";
+}
+
+function cannotHaveAUsernamePasswordPort(url) {
+  return url.host === null || url.host === "" || url.cannotBeABaseURL || url.scheme === "file";
+}
+
+function isNormalizedWindowsDriveLetter(string) {
+  return /^[A-Za-z]:$/.test(string);
+}
+
+function URLStateMachine(input, base, encodingOverride, url, stateOverride) {
+  this.pointer = 0;
+  this.input = input;
+  this.base = base || null;
+  this.encodingOverride = encodingOverride || "utf-8";
+  this.stateOverride = stateOverride;
+  this.url = url;
+  this.failure = false;
+  this.parseError = false;
+
+  if (!this.url) {
+    this.url = {
+      scheme: "",
+      username: "",
+      password: "",
+      host: null,
+      port: null,
+      path: [],
+      query: null,
+      fragment: null,
+
+      cannotBeABaseURL: false
+    };
+
+    const res = trimControlChars(this.input);
+    if (res !== this.input) {
+      this.parseError = true;
+    }
+    this.input = res;
+  }
+
+  const res = trimTabAndNewline(this.input);
+  if (res !== this.input) {
+    this.parseError = true;
+  }
+  this.input = res;
+
+  this.state = stateOverride || "scheme start";
+
+  this.buffer = "";
+  this.atFlag = false;
+  this.arrFlag = false;
+  this.passwordTokenSeenFlag = false;
+
+  this.input = punycode.ucs2.decode(this.input);
+
+  for (; this.pointer <= this.input.length; ++this.pointer) {
+    const c = this.input[this.pointer];
+    const cStr = isNaN(c) ? undefined : String.fromCodePoint(c);
+
+    // exec state machine
+    const ret = this["parse " + this.state](c, cStr);
+    if (!ret) {
+      break; // terminate algorithm
+    } else if (ret === failure) {
+      this.failure = true;
+      break;
+    }
+  }
+}
+
+URLStateMachine.prototype["parse scheme start"] = function parseSchemeStart(c, cStr) {
+  if (isASCIIAlpha(c)) {
+    this.buffer += cStr.toLowerCase();
+    this.state = "scheme";
+  } else if (!this.stateOverride) {
+    this.state = "no scheme";
+    --this.pointer;
+  } else {
+    this.parseError = true;
+    return failure;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse scheme"] = function parseScheme(c, cStr) {
+  if (isASCIIAlphanumeric(c) || c === 43 || c === 45 || c === 46) {
+    this.buffer += cStr.toLowerCase();
+  } else if (c === 58) {
+    if (this.stateOverride) {
+      if (isSpecial(this.url) && !isSpecialScheme(this.buffer)) {
+        return false;
+      }
+
+      if (!isSpecial(this.url) && isSpecialScheme(this.buffer)) {
+        return false;
+      }
+
+      if ((includesCredentials(this.url) || this.url.port !== null) && this.buffer === "file") {
+        return false;
+      }
+
+      if (this.url.scheme === "file" && (this.url.host === "" || this.url.host === null)) {
+        return false;
+      }
+    }
+    this.url.scheme = this.buffer;
+    this.buffer = "";
+    if (this.stateOverride) {
+      return false;
+    }
+    if (this.url.scheme === "file") {
+      if (this.input[this.pointer + 1] !== 47 || this.input[this.pointer + 2] !== 47) {
+        this.parseError = true;
+      }
+      this.state = "file";
+    } else if (isSpecial(this.url) && this.base !== null && this.base.scheme === this.url.scheme) {
+      this.state = "special relative or authority";
+    } else if (isSpecial(this.url)) {
+      this.state = "special authority slashes";
+    } else if (this.input[this.pointer + 1] === 47) {
+      this.state = "path or authority";
+      ++this.pointer;
+    } else {
+      this.url.cannotBeABaseURL = true;
+      this.url.path.push("");
+      this.state = "cannot-be-a-base-URL path";
+    }
+  } else if (!this.stateOverride) {
+    this.buffer = "";
+    this.state = "no scheme";
+    this.pointer = -1;
+  } else {
+    this.parseError = true;
+    return failure;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse no scheme"] = function parseNoScheme(c) {
+  if (this.base === null || (this.base.cannotBeABaseURL && c !== 35)) {
+    return failure;
+  } else if (this.base.cannotBeABaseURL && c === 35) {
+    this.url.scheme = this.base.scheme;
+    this.url.path = this.base.path.slice();
+    this.url.query = this.base.query;
+    this.url.fragment = "";
+    this.url.cannotBeABaseURL = true;
+    this.state = "fragment";
+  } else if (this.base.scheme === "file") {
+    this.state = "file";
+    --this.pointer;
+  } else {
+    this.state = "relative";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse special relative or authority"] = function parseSpecialRelativeOrAuthority(c) {
+  if (c === 47 && this.input[this.pointer + 1] === 47) {
+    this.state = "special authority ignore slashes";
+    ++this.pointer;
+  } else {
+    this.parseError = true;
+    this.state = "relative";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse path or authority"] = function parsePathOrAuthority(c) {
+  if (c === 47) {
+    this.state = "authority";
+  } else {
+    this.state = "path";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse relative"] = function parseRelative(c) {
+  this.url.scheme = this.base.scheme;
+  if (isNaN(c)) {
+    this.url.username = this.base.username;
+    this.url.password = this.base.password;
+    this.url.host = this.base.host;
+    this.url.port = this.base.port;
+    this.url.path = this.base.path.slice();
+    this.url.query = this.base.query;
+  } else if (c === 47) {
+    this.state = "relative slash";
+  } else if (c === 63) {
+    this.url.username = this.base.username;
+    this.url.password = this.base.password;
+    this.url.host = this.base.host;
+    this.url.port = this.base.port;
+    this.url.path = this.base.path.slice();
+    this.url.query = "";
+    this.state = "query";
+  } else if (c === 35) {
+    this.url.username = this.base.username;
+    this.url.password = this.base.password;
+    this.url.host = this.base.host;
+    this.url.port = this.base.port;
+    this.url.path = this.base.path.slice();
+    this.url.query = this.base.query;
+    this.url.fragment = "";
+    this.state = "fragment";
+  } else if (isSpecial(this.url) && c === 92) {
+    this.parseError = true;
+    this.state = "relative slash";
+  } else {
+    this.url.username = this.base.username;
+    this.url.password = this.base.password;
+    this.url.host = this.base.host;
+    this.url.port = this.base.port;
+    this.url.path = this.base.path.slice(0, this.base.path.length - 1);
+
+    this.state = "path";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse relative slash"] = function parseRelativeSlash(c) {
+  if (isSpecial(this.url) && (c === 47 || c === 92)) {
+    if (c === 92) {
+      this.parseError = true;
+    }
+    this.state = "special authority ignore slashes";
+  } else if (c === 47) {
+    this.state = "authority";
+  } else {
+    this.url.username = this.base.username;
+    this.url.password = this.base.password;
+    this.url.host = this.base.host;
+    this.url.port = this.base.port;
+    this.state = "path";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse special authority slashes"] = function parseSpecialAuthoritySlashes(c) {
+  if (c === 47 && this.input[this.pointer + 1] === 47) {
+    this.state = "special authority ignore slashes";
+    ++this.pointer;
+  } else {
+    this.parseError = true;
+    this.state = "special authority ignore slashes";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse special authority ignore slashes"] = function parseSpecialAuthorityIgnoreSlashes(c) {
+  if (c !== 47 && c !== 92) {
+    this.state = "authority";
+    --this.pointer;
+  } else {
+    this.parseError = true;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse authority"] = function parseAuthority(c, cStr) {
+  if (c === 64) {
+    this.parseError = true;
+    if (this.atFlag) {
+      this.buffer = "%40" + this.buffer;
+    }
+    this.atFlag = true;
+
+    // careful, this is based on buffer and has its own pointer (this.pointer != pointer) and inner chars
+    const len = countSymbols(this.buffer);
+    for (let pointer = 0; pointer < len; ++pointer) {
+      const codePoint = this.buffer.codePointAt(pointer);
+
+      if (codePoint === 58 && !this.passwordTokenSeenFlag) {
+        this.passwordTokenSeenFlag = true;
+        continue;
+      }
+      const encodedCodePoints = percentEncodeChar(codePoint, isUserinfoPercentEncode);
+      if (this.passwordTokenSeenFlag) {
+        this.url.password += encodedCodePoints;
+      } else {
+        this.url.username += encodedCodePoints;
+      }
+    }
+    this.buffer = "";
+  } else if (isNaN(c) || c === 47 || c === 63 || c === 35 ||
+             (isSpecial(this.url) && c === 92)) {
+    if (this.atFlag && this.buffer === "") {
+      this.parseError = true;
+      return failure;
+    }
+    this.pointer -= countSymbols(this.buffer) + 1;
+    this.buffer = "";
+    this.state = "host";
+  } else {
+    this.buffer += cStr;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse hostname"] =
+URLStateMachine.prototype["parse host"] = function parseHostName(c, cStr) {
+  if (this.stateOverride && this.url.scheme === "file") {
+    --this.pointer;
+    this.state = "file host";
+  } else if (c === 58 && !this.arrFlag) {
+    if (this.buffer === "") {
+      this.parseError = true;
+      return failure;
+    }
+
+    const host = parseHost(this.buffer, isSpecial(this.url));
+    if (host === failure) {
+      return failure;
+    }
+
+    this.url.host = host;
+    this.buffer = "";
+    this.state = "port";
+    if (this.stateOverride === "hostname") {
+      return false;
+    }
+  } else if (isNaN(c) || c === 47 || c === 63 || c === 35 ||
+             (isSpecial(this.url) && c === 92)) {
+    --this.pointer;
+    if (isSpecial(this.url) && this.buffer === "") {
+      this.parseError = true;
+      return failure;
+    } else if (this.stateOverride && this.buffer === "" &&
+               (includesCredentials(this.url) || this.url.port !== null)) {
+      this.parseError = true;
+      return false;
+    }
+
+    const host = parseHost(this.buffer, isSpecial(this.url));
+    if (host === failure) {
+      return failure;
+    }
+
+    this.url.host = host;
+    this.buffer = "";
+    this.state = "path start";
+    if (this.stateOverride) {
+      return false;
+    }
+  } else {
+    if (c === 91) {
+      this.arrFlag = true;
+    } else if (c === 93) {
+      this.arrFlag = false;
+    }
+    this.buffer += cStr;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse port"] = function parsePort(c, cStr) {
+  if (isASCIIDigit(c)) {
+    this.buffer += cStr;
+  } else if (isNaN(c) || c === 47 || c === 63 || c === 35 ||
+             (isSpecial(this.url) && c === 92) ||
+             this.stateOverride) {
+    if (this.buffer !== "") {
+      const port = parseInt(this.buffer);
+      if (port > Math.pow(2, 16) - 1) {
+        this.parseError = true;
+        return failure;
+      }
+      this.url.port = port === defaultPort(this.url.scheme) ? null : port;
+      this.buffer = "";
+    }
+    if (this.stateOverride) {
+      return false;
+    }
+    this.state = "path start";
+    --this.pointer;
+  } else {
+    this.parseError = true;
+    return failure;
+  }
+
+  return true;
+};
+
+const fileOtherwiseCodePoints = new Set([47, 92, 63, 35]);
+
+URLStateMachine.prototype["parse file"] = function parseFile(c) {
+  this.url.scheme = "file";
+
+  if (c === 47 || c === 92) {
+    if (c === 92) {
+      this.parseError = true;
+    }
+    this.state = "file slash";
+  } else if (this.base !== null && this.base.scheme === "file") {
+    if (isNaN(c)) {
+      this.url.host = this.base.host;
+      this.url.path = this.base.path.slice();
+      this.url.query = this.base.query;
+    } else if (c === 63) {
+      this.url.host = this.base.host;
+      this.url.path = this.base.path.slice();
+      this.url.query = "";
+      this.state = "query";
+    } else if (c === 35) {
+      this.url.host = this.base.host;
+      this.url.path = this.base.path.slice();
+      this.url.query = this.base.query;
+      this.url.fragment = "";
+      this.state = "fragment";
+    } else {
+      if (this.input.length - this.pointer - 1 === 0 || // remaining consists of 0 code points
+          !isWindowsDriveLetterCodePoints(c, this.input[this.pointer + 1]) ||
+          (this.input.length - this.pointer - 1 >= 2 && // remaining has at least 2 code points
+           !fileOtherwiseCodePoints.has(this.input[this.pointer + 2]))) {
+        this.url.host = this.base.host;
+        this.url.path = this.base.path.slice();
+        shortenPath(this.url);
+      } else {
+        this.parseError = true;
+      }
+
+      this.state = "path";
+      --this.pointer;
+    }
+  } else {
+    this.state = "path";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse file slash"] = function parseFileSlash(c) {
+  if (c === 47 || c === 92) {
+    if (c === 92) {
+      this.parseError = true;
+    }
+    this.state = "file host";
+  } else {
+    if (this.base !== null && this.base.scheme === "file") {
+      if (isNormalizedWindowsDriveLetterString(this.base.path[0])) {
+        this.url.path.push(this.base.path[0]);
+      } else {
+        this.url.host = this.base.host;
+      }
+    }
+    this.state = "path";
+    --this.pointer;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse file host"] = function parseFileHost(c, cStr) {
+  if (isNaN(c) || c === 47 || c === 92 || c === 63 || c === 35) {
+    --this.pointer;
+    if (!this.stateOverride && isWindowsDriveLetterString(this.buffer)) {
+      this.parseError = true;
+      this.state = "path";
+    } else if (this.buffer === "") {
+      this.url.host = "";
+      if (this.stateOverride) {
+        return false;
+      }
+      this.state = "path start";
+    } else {
+      let host = parseHost(this.buffer, isSpecial(this.url));
+      if (host === failure) {
+        return failure;
+      }
+      if (host === "localhost") {
+        host = "";
+      }
+      this.url.host = host;
+
+      if (this.stateOverride) {
+        return false;
+      }
+
+      this.buffer = "";
+      this.state = "path start";
+    }
+  } else {
+    this.buffer += cStr;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse path start"] = function parsePathStart(c) {
+  if (isSpecial(this.url)) {
+    if (c === 92) {
+      this.parseError = true;
+    }
+    this.state = "path";
+
+    if (c !== 47 && c !== 92) {
+      --this.pointer;
+    }
+  } else if (!this.stateOverride && c === 63) {
+    this.url.query = "";
+    this.state = "query";
+  } else if (!this.stateOverride && c === 35) {
+    this.url.fragment = "";
+    this.state = "fragment";
+  } else if (c !== undefined) {
+    this.state = "path";
+    if (c !== 47) {
+      --this.pointer;
+    }
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse path"] = function parsePath(c) {
+  if (isNaN(c) || c === 47 || (isSpecial(this.url) && c === 92) ||
+      (!this.stateOverride && (c === 63 || c === 35))) {
+    if (isSpecial(this.url) && c === 92) {
+      this.parseError = true;
+    }
+
+    if (isDoubleDot(this.buffer)) {
+      shortenPath(this.url);
+      if (c !== 47 && !(isSpecial(this.url) && c === 92)) {
+        this.url.path.push("");
+      }
+    } else if (isSingleDot(this.buffer) && c !== 47 &&
+               !(isSpecial(this.url) && c === 92)) {
+      this.url.path.push("");
+    } else if (!isSingleDot(this.buffer)) {
+      if (this.url.scheme === "file" && this.url.path.length === 0 && isWindowsDriveLetterString(this.buffer)) {
+        if (this.url.host !== "" && this.url.host !== null) {
+          this.parseError = true;
+          this.url.host = "";
+        }
+        this.buffer = this.buffer[0] + ":";
+      }
+      this.url.path.push(this.buffer);
+    }
+    this.buffer = "";
+    if (this.url.scheme === "file" && (c === undefined || c === 63 || c === 35)) {
+      while (this.url.path.length > 1 && this.url.path[0] === "") {
+        this.parseError = true;
+        this.url.path.shift();
+      }
+    }
+    if (c === 63) {
+      this.url.query = "";
+      this.state = "query";
+    }
+    if (c === 35) {
+      this.url.fragment = "";
+      this.state = "fragment";
+    }
+  } else {
+    // TODO: If c is not a URL code point and not "%", parse error.
+
+    if (c === 37 &&
+      (!isASCIIHex(this.input[this.pointer + 1]) ||
+        !isASCIIHex(this.input[this.pointer + 2]))) {
+      this.parseError = true;
+    }
+
+    this.buffer += percentEncodeChar(c, isPathPercentEncode);
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse cannot-be-a-base-URL path"] = function parseCannotBeABaseURLPath(c) {
+  if (c === 63) {
+    this.url.query = "";
+    this.state = "query";
+  } else if (c === 35) {
+    this.url.fragment = "";
+    this.state = "fragment";
+  } else {
+    // TODO: Add: not a URL code point
+    if (!isNaN(c) && c !== 37) {
+      this.parseError = true;
+    }
+
+    if (c === 37 &&
+        (!isASCIIHex(this.input[this.pointer + 1]) ||
+         !isASCIIHex(this.input[this.pointer + 2]))) {
+      this.parseError = true;
+    }
+
+    if (!isNaN(c)) {
+      this.url.path[0] = this.url.path[0] + percentEncodeChar(c, isC0ControlPercentEncode);
+    }
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse query"] = function parseQuery(c, cStr) {
+  if (isNaN(c) || (!this.stateOverride && c === 35)) {
+    if (!isSpecial(this.url) || this.url.scheme === "ws" || this.url.scheme === "wss") {
+      this.encodingOverride = "utf-8";
+    }
+
+    const buffer = new Buffer(this.buffer); // TODO: Use encoding override instead
+    for (let i = 0; i < buffer.length; ++i) {
+      if (buffer[i] < 0x21 || buffer[i] > 0x7E || buffer[i] === 0x22 || buffer[i] === 0x23 ||
+          buffer[i] === 0x3C || buffer[i] === 0x3E) {
+        this.url.query += percentEncode(buffer[i]);
+      } else {
+        this.url.query += String.fromCodePoint(buffer[i]);
+      }
+    }
+
+    this.buffer = "";
+    if (c === 35) {
+      this.url.fragment = "";
+      this.state = "fragment";
+    }
+  } else {
+    // TODO: If c is not a URL code point and not "%", parse error.
+    if (c === 37 &&
+      (!isASCIIHex(this.input[this.pointer + 1]) ||
+        !isASCIIHex(this.input[this.pointer + 2]))) {
+      this.parseError = true;
+    }
+
+    this.buffer += cStr;
+  }
+
+  return true;
+};
+
+URLStateMachine.prototype["parse fragment"] = function parseFragment(c) {
+  if (isNaN(c)) { // do nothing
+  } else if (c === 0x0) {
+    this.parseError = true;
+  } else {
+    // TODO: If c is not a URL code point and not "%", parse error.
+    if (c === 37 &&
+      (!isASCIIHex(this.input[this.pointer + 1]) ||
+        !isASCIIHex(this.input[this.pointer + 2]))) {
+      this.parseError = true;
+    }
+
+    this.url.fragment += percentEncodeChar(c, isC0ControlPercentEncode);
+  }
+
+  return true;
+};
+
+function serializeURL(url, excludeFragment) {
+  let output = url.scheme + ":";
+  if (url.host !== null) {
+    output += "//";
+
+    if (url.username !== "" || url.password !== "") {
+      output += url.username;
+      if (url.password !== "") {
+        output += ":" + url.password;
+      }
+      output += "@";
+    }
+
+    output += serializeHost(url.host);
+
+    if (url.port !== null) {
+      output += ":" + url.port;
+    }
+  } else if (url.host === null && url.scheme === "file") {
+    output += "//";
+  }
+
+  if (url.cannotBeABaseURL) {
+    output += url.path[0];
+  } else {
+    for (const string of url.path) {
+      output += "/" + string;
+    }
+  }
+
+  if (url.query !== null) {
+    output += "?" + url.query;
+  }
+
+  if (!excludeFragment && url.fragment !== null) {
+    output += "#" + url.fragment;
+  }
+
+  return output;
+}
+
+function serializeOrigin(tuple) {
+  let result = tuple.scheme + "://";
+  result += serializeHost(tuple.host);
+
+  if (tuple.port !== null) {
+    result += ":" + tuple.port;
+  }
+
+  return result;
+}
+
+module.exports.serializeURL = serializeURL;
+
+module.exports.serializeURLOrigin = function (url) {
+  // https://url.spec.whatwg.org/#concept-url-origin
+  switch (url.scheme) {
+    case "blob":
+      try {
+        return module.exports.serializeURLOrigin(module.exports.parseURL(url.path[0]));
+      } catch (e) {
+        // serializing an opaque origin returns "null"
+        return "null";
+      }
+    case "ftp":
+    case "gopher":
+    case "http":
+    case "https":
+    case "ws":
+    case "wss":
+      return serializeOrigin({
+        scheme: url.scheme,
+        host: url.host,
+        port: url.port
+      });
+    case "file":
+      // spec says "exercise to the reader", chrome says "file://"
+      return "file://";
+    default:
+      // serializing an opaque origin returns "null"
+      return "null";
+  }
+};
+
+module.exports.basicURLParse = function (input, options) {
+  if (options === undefined) {
+    options = {};
+  }
+
+  const usm = new URLStateMachine(input, options.baseURL, options.encodingOverride, options.url, options.stateOverride);
+  if (usm.failure) {
+    return "failure";
+  }
+
+  return usm.url;
+};
+
+module.exports.setTheUsername = function (url, username) {
+  url.username = "";
+  const decoded = punycode.ucs2.decode(username);
+  for (let i = 0; i < decoded.length; ++i) {
+    url.username += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
+  }
+};
+
+module.exports.setThePassword = function (url, password) {
+  url.password = "";
+  const decoded = punycode.ucs2.decode(password);
+  for (let i = 0; i < decoded.length; ++i) {
+    url.password += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
+  }
+};
+
+module.exports.serializeHost = serializeHost;
+
+module.exports.cannotHaveAUsernamePasswordPort = cannotHaveAUsernamePasswordPort;
+
+module.exports.serializeInteger = function (integer) {
+  return String(integer);
+};
+
+module.exports.parseURL = function (input, options) {
+  if (options === undefined) {
+    options = {};
+  }
+
+  // We don't handle blobs, so this just delegates:
+  return module.exports.basicURLParse(input, { baseURL: options.baseURL, encodingOverride: options.encodingOverride });
+};
+
+
+/***/ }),
+
+/***/ 83185:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports.mixin = function mixin(target, source) {
+  const keys = Object.getOwnPropertyNames(source);
+  for (let i = 0; i < keys.length; ++i) {
+    Object.defineProperty(target, keys[i], Object.getOwnPropertyDescriptor(source, keys[i]));
+  }
+};
+
+module.exports.wrapperSymbol = Symbol("wrapper");
+module.exports.implSymbol = Symbol("impl");
+
+module.exports.wrapperForImpl = function (impl) {
+  return impl[module.exports.wrapperSymbol];
+};
+
+module.exports.implForWrapper = function (wrapper) {
+  return wrapper[module.exports.implSymbol];
+};
+
+
+
+/***/ }),
+
 /***/ 62940:
 /***/ ((module) => {
 
@@ -78545,9 +80478,9 @@ class JiraClientImpl {
             authentication: {
                 basic: {
                     email,
-                    apiToken
-                }
-            }
+                    apiToken,
+                },
+            },
         });
     }
     issueExists(issueIdOrKey) {
@@ -78669,8 +80602,8 @@ function getInput() {
         jira: {
             host: jiraHost,
             email: jiraEmail,
-            apiToken: jiraToken
-        }
+            apiToken: jiraToken,
+        },
     };
 }
 exports.getInput = getInput;
@@ -78744,29 +80677,28 @@ function validate(event, options) {
     return __awaiter(this, void 0, void 0, function* () {
         const { project } = options;
         const re = RegExp(`(${project}-[0-9]+)+`, 'g');
-        const jira = new jira_1.JiraClientImpl(options.jira);
+        const titleMatch = event.pull_request.title.match(re);
         core.debug('author ' + event.pull_request.user.login.toLowerCase());
         core.debug('title ' + event.pull_request.title);
-        core.debug('head ' + event.pull_request.head.ref);
         for (const author of options.ignoreAuthor) {
             if (event.pull_request.user.login.toLowerCase() == author.toLowerCase()) {
                 return true;
             }
         }
-        const titleMatch = event.pull_request.title.match(re) || [];
-        const refMatch = event.pull_request.head.ref.match(re) || [];
-        const matches = [...titleMatch, ...refMatch];
-        if (matches.length < 1) {
+        if (!titleMatch) {
             core.error(`No Jira issue found for ${project} in PR title or branch`);
             return false;
         }
-        for (const match of matches) {
-            core.debug('Checking Jira issue ' + match);
-            const exists = yield jira.issueExists(match);
-            if (!exists) {
-                core.error('Issue does not exist: ' + match);
-                return false;
-            }
+        if (titleMatch.length > 1) {
+            core.error('Please only include one ticket per PR');
+            return false;
+        }
+        const jira = new jira_1.JiraClientImpl(options.jira);
+        core.debug('Checking Jira issue ' + titleMatch[0]);
+        const exists = yield jira.issueExists(titleMatch[0]);
+        if (!exists) {
+            core.error('Issue does not exist: ' + titleMatch[0]);
+            return false;
         }
         return true;
     });
@@ -78928,7 +80860,7 @@ module.exports = JSON.parse('{"application/1d-interleaved-parityfec":{"source":"
 
 /***/ }),
 
-/***/ 1907:
+/***/ 72020:
 /***/ ((module) => {
 
 "use strict";
